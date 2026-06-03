@@ -1,0 +1,9 @@
+The quick brown fox jumps over the lazy dog.
+This is a normal text sample designed to test MZC1 compression.
+Because this file does not contain long repetitive sequences of bytes,
+it is highly expected that the compression ratio will be poor,
+and the compressed file size might even exceed the original size due to header overhead.
+This is a standard and expected scenario for simple RLE compression.
+Rust learning proceeds nicely with simple structures and robust test workflows!
+Let's make sure that everything behaves exactly as designed.
+1234567890 - abcdefghijklmnopqrstuvwxyz - ABCDEFGHIJKLMNOPQRSTUVWXYZ

@@ -1,0 +1,16 @@
+[package]
+name = "mzc"
+version = "0.1.0"
+edition = "2021"
+authors = ["Antigravity"]
+description = "Minimal Zip Concept - A learning-oriented lossless compression CLI tool in Rust"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive"] }
+sha2 = "0.10"
+anyhow = "1.0"
+rayon = "1.8"
+eframe = { version = "0.26", default-features = false, features = ["default_fonts", "glow"] }
+rfd = "0.12"
+egui_plot = "0.26"
+
