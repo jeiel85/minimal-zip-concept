@@ -45,12 +45,14 @@ pub enum EntropyMode {
     Huffman,
     /// 가변 헤더 적용 동적 허프만 코딩 (MZC4)
     Dynamic,
+    /// Asymmetric Numeral Systems 테이블 압축 (MZC6)
+    Ans,
 }
 
 /// MZC CLI에서 사용할 서브커맨드 목록을 나타내는 열거형(Enum)입니다.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// 원본 파일을 MZC2 하이브리드 압축 파일로 변환합니다.
+    /// 원본 파일을 MZC2/MZC5 하이브리드 압축 파일로 변환합니다.
     Compress {
         /// 압축할 원본 파일의 경로
         #[arg(value_name = "INPUT_FILE")]
@@ -79,6 +81,10 @@ pub enum Commands {
         /// BCJ (Branch-Call-Jump) 기계어 주소 번역 필터 전처리 적용 여부
         #[arg(long)]
         bcj: bool,
+
+        /// 전역 공유 사전 파일 경로 (옵션)
+        #[arg(long = "dict-file", value_name = "DICT_FILE")]
+        dict_file: Option<PathBuf>,
     },
 
     /// MZC 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
@@ -90,6 +96,10 @@ pub enum Commands {
         /// 압축을 해제하여 복원해 낼 출력 경로
         #[arg(value_name = "OUTPUT_FILE")]
         output_file: PathBuf,
+
+        /// 전역 공유 사전 파일 경로 (옵션)
+        #[arg(long = "dict-file", value_name = "DICT_FILE")]
+        dict_file: Option<PathBuf>,
     },
 
     /// 지정한 원본 파일을 임시 메모리 내에서 압축 후 다시 해제하여 원본과 100% 동일한지 라운드트립 검증을 수행합니다.
@@ -117,6 +127,21 @@ pub enum Commands {
         /// BCJ 필터 전처리 적용 여부
         #[arg(long)]
         bcj: bool,
+
+        /// 전역 공유 사전 파일 경로 (옵션)
+        #[arg(long = "dict-file", value_name = "DICT_FILE")]
+        dict_file: Option<PathBuf>,
+    },
+
+    /// 다수의 원본 텍스트/바이너리 샘플로부터 공유 사전을 생성하여 파일로 저장합니다.
+    Train {
+        /// 사전에 학습할 다수 샘플 파일 경로
+        #[arg(value_name = "INPUT_FILES", required = true)]
+        input_files: Vec<PathBuf>,
+
+        /// 저장할 사전 파일 출력 경로 (예: trained.dict)
+        #[arg(short = 'o', long, value_name = "OUTPUT_FILE", default_value = "trained.dict")]
+        output: PathBuf,
     },
 
     /// MZC 압축 파일을 읽어 헤더 명세와 압축율, 그리고 내장된 SHA-256 해시를 상세히 분석하여 출력합니다.

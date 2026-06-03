@@ -7,7 +7,7 @@ const BLOCK_TYPE_RUN: u8 = 0x01;
 const BLOCK_TYPE_TOKEN: u8 = 0x02;
 const BLOCK_TYPE_BACKREF: u8 = 0x03;
 
-const LZ77_WINDOW_SIZE: usize = 32768;
+const _LZ77_WINDOW_SIZE: usize = 32768;
 const MAX_BLOCK_LEN: usize = 65535;
 
 /// MZC2 사전 섹션을 나타내는 구조체입니다.
@@ -260,6 +260,87 @@ pub fn find_lz77_match(data: &[u8], pos: usize, window_size: usize) -> Option<(u
     find_lz77_match_with_limit(data, pos, window_size, 4096)
 }
 
+pub struct Lz77HashChains {
+    head: Vec<i32>,
+    prev: Vec<i32>,
+}
+
+impl Lz77HashChains {
+    pub fn new(size: usize) -> Self {
+        Self {
+            head: vec![-1; 65536],
+            prev: vec![-1; size],
+        }
+    }
+
+    #[inline(always)]
+    fn hash(b: &[u8]) -> usize {
+        (((b[0] as usize) << 10) ^ ((b[1] as usize) << 5) ^ (b[2] as usize)) & 0xFFFF
+    }
+
+    pub fn insert(&mut self, pos: usize, data: &[u8]) {
+        if pos + 3 <= data.len() {
+            let h = Self::hash(&data[pos..pos + 3]);
+            self.prev[pos] = self.head[h];
+            self.head[h] = pos as i32;
+        }
+    }
+
+    pub fn find_match(
+        &self,
+        data: &[u8],
+        pos: usize,
+        window_size: usize,
+        scan_limit: usize,
+    ) -> Option<(u16, u16)> {
+        if pos + 3 > data.len() {
+            return None;
+        }
+
+        let h = Self::hash(&data[pos..pos + 3]);
+        let mut j = self.head[h];
+        let mut best_dist = 0;
+        let mut best_len = 0;
+        let mut steps = 0;
+
+        while j != -1 {
+            let match_pos = j as usize;
+            let dist = pos - match_pos;
+            if dist > window_size {
+                break;
+            }
+            steps += 1;
+            if steps > scan_limit {
+                break;
+            }
+
+            if best_len > 0 && match_pos + best_len < pos && pos + best_len < data.len() && data[match_pos + best_len] != data[pos + best_len] {
+                j = self.prev[match_pos];
+                continue;
+            }
+
+            let max_possible = std::cmp::min(data.len() - pos, MAX_BLOCK_LEN);
+            let mut len = 0;
+            while len < max_possible && data[match_pos + len] == data[pos + len] {
+                len += 1;
+            }
+
+            if len > best_len {
+                best_len = len;
+                best_dist = dist;
+            }
+
+            j = self.prev[match_pos];
+        }
+
+        if best_len >= 4 {
+            Some((best_dist as u16, best_len as u16))
+        } else {
+            None
+        }
+    }
+}
+
 pub fn compress_to_blocks(
     data: &[u8],
     dict: &Dictionary,
@@ -271,13 +352,16 @@ pub fn compress_to_blocks(
     let n = data.len();
     let mut i = 0;
 
-    let mut flush_literal = |lit_buf: &mut Vec<u8>, blks: &mut Vec<CompressBlock>| {
+    let flush_literal = |lit_buf: &mut Vec<u8>, blks: &mut Vec<CompressBlock>| {
         if lit_buf.is_empty() {
             return;
         }
         blks.push(CompressBlock::Literal(lit_buf.clone()));
         lit_buf.clear();
     };
+
+    let mut chains = Lz77HashChains::new(n);
+    let mut inserted_up_to = 0;
 
     while i < n {
         let mut run_savings = -9999isize;
@@ -318,10 +402,19 @@ pub fn compress_to_blocks(
         let mut lz77_dist = 0u16;
         let mut lz77_len = 0u16;
         if algorithm_type == ALGORITHM_LZ77 {
-            if let Some((dist, len)) = find_lz77_match_with_limit(data, i, config.window_size, config.scan_limit) {
+            // Catch up insertions up to i-1
+            while inserted_up_to < i {
+                chains.insert(inserted_up_to, data);
+                inserted_up_to += 1;
+            }
+
+            if let Some((dist, len)) = chains.find_match(data, i, config.window_size, config.scan_limit) {
                 let mut defer_match = false;
                 if config.lazy_matching && i + 1 < n {
-                    if let Some((_, next_len)) = find_lz77_match_with_limit(data, i + 1, config.window_size, config.scan_limit) {
+                    // Temporarily insert current pos for lazy evaluation
+                    chains.insert(i, data);
+                    inserted_up_to = i + 1;
+                    if let Some((_, next_len)) = chains.find_match(data, i + 1, config.window_size, config.scan_limit) {
                         if next_len > len {
                             defer_match = true;
                         }

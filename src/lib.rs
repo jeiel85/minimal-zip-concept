@@ -5,16 +5,17 @@ pub mod rle;
 pub mod checksum;
 pub mod inspect;
 pub mod huffman;
+pub mod ans;
 pub mod gui;
 
 use error::MzcError;
 use format::{
     MzcHeader, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2, ALGORITHM_RLE, ALGORITHM_DICT,
-    ALGORITHM_HYBRID, ALGORITHM_LZ77, VERSION_MZC1, VERSION_MZC4, VERSION_MZC5, FILTER_DELTA,
-    FILTER_BCJ, FILTER_DYNAMIC_HUFFMAN,
+    ALGORITHM_HYBRID, ALGORITHM_LZ77, VERSION_MZC1, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
+    FILTER_DELTA, FILTER_BCJ, FILTER_DYNAMIC_HUFFMAN, FILTER_ANS,
 };
 use rle::{
-    Dictionary, build_dictionary, rle_compress_hybrid, rle_decompress_hybrid,
+    Dictionary, build_dictionary, rle_decompress_hybrid,
     rle_decompress_hybrid_mzc5,
 };
 use checksum::{calculate_sha256, bytes_to_hex};
@@ -39,7 +40,20 @@ pub fn compress_bytes_v2(
     delta: bool,
     bcj: bool,
 ) -> Vec<u8> {
-    compress_bytes_v2_with_progress(original, mode, entropy, level, delta, bcj, |_, _, _, _| {})
+    compress_bytes_v2_dict(original, mode, entropy, level, delta, bcj, None)
+}
+
+/// 전역 공유 사전 데이터(dict_data)를 지원하는 버전 6 압축 엔트리포인트입니다.
+pub fn compress_bytes_v2_dict(
+    original: &[u8],
+    mode: CompressionMode,
+    entropy: EntropyMode,
+    level: u8,
+    delta: bool,
+    bcj: bool,
+    dict_data: Option<&[u8]>,
+) -> Vec<u8> {
+    compress_bytes_v2_with_progress_dict(original, mode, entropy, level, delta, bcj, dict_data, |_, _, _, _| {})
 }
 
 /// GUI 또는 기타 통계를 위한 실시간 청크 압축 모니터링 기능이 보강된 압축 엔트리포인트입니다.
@@ -55,10 +69,27 @@ pub fn compress_bytes_v2_with_progress<F>(
 where
     F: Fn(usize, usize, usize, f64) + Send + Sync + Clone,
 {
+    compress_bytes_v2_with_progress_dict(original, mode, entropy, level, delta, bcj, None, on_chunk_progress)
+}
+
+/// GUI/통계 모니터링 및 전역 사전을 동시 지원하는 코어 압축 파이프라인입니다.
+pub fn compress_bytes_v2_with_progress_dict<F>(
+    original: &[u8],
+    mode: CompressionMode,
+    entropy: EntropyMode,
+    level: u8,
+    delta: bool,
+    bcj: bool,
+    dict_data: Option<&[u8]>,
+    on_chunk_progress: F,
+) -> Vec<u8>
+where
+    F: Fn(usize, usize, usize, f64) + Send + Sync + Clone,
+{
     if original.is_empty() {
         // 빈 파일 처리: 56바이트의 빈 헤더만 방출
         let sha256 = calculate_sha256(original);
-        let header = MzcHeader::new_v5(
+        let header = MzcHeader::new_v6(
             ALGORITHM_HYBRID | (if delta { FILTER_DELTA } else { 0 }) | (if bcj { FILTER_BCJ } else { 0 }),
             0,
             0,
@@ -67,6 +98,19 @@ where
         );
         return header.to_bytes();
     }
+
+    // 전역 공유 사전 파싱
+    let global_dict = if let Some(bytes) = dict_data {
+        match Dictionary::from_bytes(bytes) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let global_dict_bytes = global_dict.as_ref().map(|d| d.to_bytes()).unwrap_or_default();
+    let dictionary_size = global_dict_bytes.len() as u16;
 
     // 1. 원본 데이터를 1MB 청크 단위 슬라이스들로 분할하여 벡터에 참조 수집
     let mut chunks = Vec::new();
@@ -79,7 +123,8 @@ where
     }
 
     // 2. Rayon 멀티스레드 병렬 압축 맵 수행 (par_iter() 발동)
-    let compressed_chunks: Vec<Vec<u8>> = chunks
+    let global_dict_ref = global_dict.as_ref();
+    let compressed_chunks: Vec<Result<Vec<u8>, MzcError>> = chunks
         .par_iter()
         .enumerate()
         .map(|(chunk_idx, &chunk)| {
@@ -103,13 +148,15 @@ where
                 rle::apply_delta_filter(&mut processed_chunk);
             }
 
-            // B. 사전 추출 및 매칭 (Rle 단독 모드가 아니면 사전 생성)
-            let dict = if alg_type != ALGORITHM_RLE {
+            // B. 사전 추출 및 매칭
+            // 전역 공유 사전이 있으면 각 청크에서는 이를 공유하고 로컬 사전을 생성하지 않습니다.
+            let dict = if let Some(g_dict) = global_dict_ref {
+                g_dict.clone()
+            } else if alg_type != ALGORITHM_RLE {
                 build_dictionary(&processed_chunk)
             } else {
                 Dictionary::new()
             };
-            let dict_bytes = dict.to_bytes();
 
             // C. RLE 하이브리드 압축 수행 (MZC5의 경우 bit-packed 구조 활용)
             let config = rle::CompressionConfig::from_level(level);
@@ -117,8 +164,14 @@ where
             let rle_payload = rle::serialize_blocks_v5(&blocks);
 
             // D. 사전과 RLE 페이로드 결합
-            let mut combined = dict_bytes;
-            combined.extend_from_slice(&rle_payload);
+            // 만약 전역 사전을 사용했다면, 개별 청크는 사전 직렬화를 바이패스합니다.
+            let combined = if global_dict_ref.is_some() {
+                rle_payload
+            } else {
+                let mut combined = dict.to_bytes();
+                combined.extend_from_slice(&rle_payload);
+                combined
+            };
 
             let chunk_comb_size = combined.len() as u32;
 
@@ -127,6 +180,8 @@ where
                 huffman_compress(&combined)
             } else if entropy == EntropyMode::Dynamic {
                 huffman_compress_dynamic(&combined)
+            } else if entropy == EntropyMode::Ans {
+                ans::ans_compress(&combined)?
             } else {
                 combined
             };
@@ -144,20 +199,23 @@ where
             chunk_bin.extend_from_slice(&chunk_comp_size.to_le_bytes());
             chunk_bin.extend_from_slice(&final_payload);
 
-            chunk_bin
+            Ok(chunk_bin)
         })
         .collect();
 
-    // 3. 병렬 처리된 청크 바이트들을 순서대로 하나의 페이로드 버퍼로 병합
+    // 청크 직렬화 에러 검증
     let mut payload_buffer = Vec::new();
-    for chunk in compressed_chunks {
-        payload_buffer.extend_from_slice(&chunk);
+    for chunk_res in compressed_chunks {
+        match chunk_res {
+            Ok(chunk) => payload_buffer.extend_from_slice(&chunk),
+            Err(_) => return Vec::new(),
+        }
     }
 
     // 4. 원본 전체의 SHA-256 체크섬 구하기
     let total_sha256 = calculate_sha256(original);
 
-    // 5. MZC5 헤더 생성 및 이진 조립
+    // 5. 헤더 생성 및 이진 조립 (MZC6 또는 MZC5 헤더 판별)
     let core_alg = match (mode, entropy) {
         (CompressionMode::Rle, EntropyMode::None) => ALGORITHM_RLE, // RLE 단독
         (CompressionMode::Lz77, _) => ALGORITHM_LZ77, // LZ77 하이브리드 모드
@@ -167,25 +225,46 @@ where
     let algorithm_type_flag = core_alg
         | (if delta { FILTER_DELTA } else { 0 })
         | (if bcj { FILTER_BCJ } else { 0 })
-        | (if entropy == EntropyMode::Dynamic { FILTER_DYNAMIC_HUFFMAN } else { 0 });
+        | (if entropy == EntropyMode::Dynamic { FILTER_DYNAMIC_HUFFMAN } else { 0 })
+        | (if entropy == EntropyMode::Ans { FILTER_ANS } else { 0 });
 
-    let header = MzcHeader::new_v5(
-        algorithm_type_flag,
-        original.len() as u64,
-        payload_buffer.len() as u64,
-        0,
-        total_sha256,
-    );
+    let is_v6 = dictionary_size > 0 || entropy == EntropyMode::Ans;
+
+    let header = if is_v6 {
+        MzcHeader::new_v6(
+            algorithm_type_flag,
+            original.len() as u64,
+            (payload_buffer.len() + global_dict_bytes.len()) as u64,
+            dictionary_size,
+            total_sha256,
+        )
+    } else {
+        MzcHeader::new_v5(
+            algorithm_type_flag,
+            original.len() as u64,
+            payload_buffer.len() as u64,
+            0,
+            total_sha256,
+        )
+    };
 
     let mut final_output = header.to_bytes();
+    if is_v6 && dictionary_size > 0 {
+        final_output.extend_from_slice(&global_dict_bytes);
+    }
     final_output.extend_from_slice(&payload_buffer);
 
     final_output
 }
 
-/// MZC 압축 바이너리 전체를 읽어와 MZC1~MZC5 포맷을 자동 감별하고,
+/// MZC 압축 바이너리 전체를 읽어와 MZC1~MZC6 포맷을 자동 감별하고,
 /// Rayon 스레드 풀을 동원하여 멀티스레드로 각 청크를 병렬 해제하여 완벽 복원합니다.
 pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
+    decompress_bytes_v2_dict(mzc_bytes, None)
+}
+
+/// 외부 사전 데이터를 지원하여 해제 복원하는 버전 6 압축 해제 엔트리포인트입니다.
+pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> Result<Vec<u8>, MzcError> {
     if mzc_bytes.len() < 4 {
         return Err(MzcError::TruncatedHeader { read_bytes: mzc_bytes.len() });
     }
@@ -202,7 +281,6 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
                 found: payload.len(),
             });
         }
-        // 옛날 RLE 복원 알고리즘 호출
         let decompressed = rle::rle_decompress(payload)?;
         
         // 크기 및 체크섬 매칭 검사
@@ -222,7 +300,7 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
         return Ok(decompressed);
     }
 
-    // ================== MZC2~MZC5 최신 병렬 Decompress ==================
+    // ================== MZC2~MZC6 최신 병렬 Decompress ==================
     if header.original_size == 0 {
         return Ok(Vec::new());
     }
@@ -235,9 +313,22 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
         });
     }
 
-    // A. 페이로드 영역을 쪼개어 각 청크 바이트 슬라이스 추출
+    // A. 전역 공유 사전 복구
+    let global_dict = if let Some(bytes) = dict_data {
+        Some(Dictionary::from_bytes(bytes)?)
+    } else if header.dictionary_size > 0 {
+        let dict_size = header.dictionary_size as usize;
+        if payload_area.len() < dict_size {
+            return Err(MzcError::CorruptDictionary);
+        }
+        Some(Dictionary::from_bytes(&payload_area[0..dict_size])?)
+    } else {
+        None
+    };
+
+    // B. 페이로드 영역에서 청크 바이트 슬라이스 추출
     let mut chunk_slices = Vec::new();
-    let mut pos = 0;
+    let mut pos = header.dictionary_size as usize;
     let n = payload_area.len();
 
     while pos < n {
@@ -271,15 +362,20 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
         pos += chunk_comp_size;
     }
 
-    // B. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩 (par_iter() 발동!)
+    // C. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩
+    let global_dict_ref = global_dict.as_ref();
     let decompressed_chunks: Result<Vec<Vec<u8>>, MzcError> = chunk_slices
         .par_iter()
         .map(|&(chunk_data, chunk_orig_size, chunk_comb_size)| {
-            // 엔트로피 압축 해제 여부 자동 판독
+            // 엔트로피 압축 해제 여부 판독
             let is_dynamic = header.version == VERSION_MZC4
-                || (header.version == VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0);
+                || (header.version >= VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0);
 
-            let unhuffman = if is_dynamic {
+            let is_ans = header.version >= VERSION_MZC6 && (header.algorithm_type & FILTER_ANS) != 0;
+
+            let unhuffman = if is_ans {
+                ans::ans_decompress(chunk_data, chunk_comb_size)?
+            } else if is_dynamic {
                 huffman_decompress_dynamic(chunk_data, chunk_comb_size)?
             } else if chunk_data.len() != chunk_comb_size {
                 huffman_decompress(chunk_data, chunk_comb_size)?
@@ -287,31 +383,26 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
                 chunk_data.to_vec()
             };
 
-            // 만약 unhuffman 결과가 여전히 너무 짧다면 에러
-            if unhuffman.len() < 2 {
-                // RLE raw로 가정
+            if unhuffman.len() < 2 && header.dictionary_size == 0 {
                 return Ok(unhuffman);
             }
 
-            // 사전 복구 시도
-            let dict = match Dictionary::from_bytes(&unhuffman) {
-                Ok(d) => d,
-                Err(_) => {
-                    // MZC1 RLE direct 폴백 상황 처리
-                    let rle_decomp = rle::rle_decompress(&unhuffman)?;
-                    return Ok(rle_decomp);
+            // 사전 및 RLE 페이로드 분원
+            let (dict, rle_payload) = if header.dictionary_size > 0 {
+                let g_dict = global_dict_ref.cloned().unwrap_or_default();
+                (g_dict, unhuffman)
+            } else {
+                let dict = Dictionary::from_bytes(&unhuffman)?;
+                let dict_bytes_len = dict.to_bytes().len();
+                if dict_bytes_len > unhuffman.len() {
+                    return Err(MzcError::CorruptDictionary);
                 }
+                let payload = unhuffman[dict_bytes_len..].to_vec();
+                (dict, payload)
             };
 
-            let dict_bytes_len = dict.to_bytes().len();
-            if dict_bytes_len > unhuffman.len() {
-                return Err(MzcError::CorruptDictionary);
-            }
-
-            let rle_payload = &unhuffman[dict_bytes_len..];
-
             // 디코딩 알고리즘 식별
-            let core_alg = if header.version == VERSION_MZC5 {
+            let core_alg = if header.version >= VERSION_MZC5 {
                 header.algorithm_type & 0x0F
             } else {
                 header.algorithm_type
@@ -325,14 +416,14 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
                 ALGORITHM_HYBRID
             };
 
-            let mut decompressed_chunk = if header.version == VERSION_MZC5 {
-                rle_decompress_hybrid_mzc5(rle_payload, &dict, alg_flag, chunk_orig_size)?
+            let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
+                rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_flag, chunk_orig_size)?
             } else {
-                rle_decompress_hybrid(rle_payload, &dict, alg_flag, chunk_orig_size)?
+                rle_decompress_hybrid(&rle_payload, &dict, alg_flag, chunk_orig_size)?
             };
 
-            // MZC5인 경우 역전처리 필터 적용 (Delta 역필터 첫번째, BCJ 역필터 두번째)
-            if header.version == VERSION_MZC5 {
+            // 역전처리 필터 적용
+            if header.version >= VERSION_MZC5 {
                 let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
                 let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
                 if has_delta {
@@ -356,13 +447,13 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
 
     let decompressed_chunks = decompressed_chunks?;
 
-    // C. 복원된 스레드별 청크들을 원래 순서로 순차 병합
+    // D. 복원된 청크 병합
     let mut restored_bytes = Vec::with_capacity(header.original_size as usize);
     for chunk in decompressed_chunks {
         restored_bytes.extend_from_slice(&chunk);
     }
 
-    // D. 최종 크기 및 SHA-256 검사 수행
+    // E. 최종 체크섬 및 크기 검증
     if restored_bytes.len() as u64 != header.original_size {
         return Err(MzcError::OriginalSizeMismatch {
             expected: header.original_size,

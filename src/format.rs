@@ -27,12 +27,14 @@ pub const MAGIC_MZC2: &[u8; 4] = b"MZC2";
 pub const MAGIC_MZC3: &[u8; 4] = b"MZC3";
 pub const MAGIC_MZC4: &[u8; 4] = b"MZC4";
 pub const MAGIC_MZC5: &[u8; 4] = b"MZC5";
+pub const MAGIC_MZC6: &[u8; 4] = b"MZC6";
 
 pub const VERSION_MZC1: u8 = 0x01;
 pub const VERSION_MZC2: u8 = 0x02;
 pub const VERSION_MZC3: u8 = 0x03;
 pub const VERSION_MZC4: u8 = 0x04;
 pub const VERSION_MZC5: u8 = 0x05;
+pub const VERSION_MZC6: u8 = 0x06;
 
 pub const ALGORITHM_RLE: u8 = 0x01;
 pub const ALGORITHM_DICT: u8 = 0x02;
@@ -42,14 +44,35 @@ pub const ALGORITHM_LZ77: u8 = 0x04;
 pub const FILTER_DELTA: u8 = 0x10;
 pub const FILTER_BCJ: u8 = 0x20;
 pub const FILTER_DYNAMIC_HUFFMAN: u8 = 0x40;
+pub const FILTER_ANS: u8 = 0x80;
 
 pub const HEADER_SIZE_MZC1: usize = 54;
 pub const HEADER_SIZE_MZC2: usize = 56;
 pub const HEADER_SIZE_MZC3: usize = 56;
 pub const HEADER_SIZE_MZC4: usize = 56;
 pub const HEADER_SIZE_MZC5: usize = 56;
+pub const HEADER_SIZE_MZC6: usize = 56;
 
 impl MzcHeader {
+    /// MZC6(버전 6) 기반의 새 헤더 구조체를 생성합니다.
+    pub fn new_v6(
+        algorithm_type: u8,
+        original_size: u64,
+        payload_size: u64,
+        dictionary_size: u16,
+        sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            magic: *MAGIC_MZC6,
+            version: VERSION_MZC6,
+            algorithm_type,
+            original_size,
+            payload_size,
+            dictionary_size,
+            original_sha256: sha256,
+        }
+    }
+
     /// MZC5(버전 5) 기반의 새 헤더 구조체를 생성합니다.
     pub fn new_v5(
         algorithm_type: u8,
@@ -141,7 +164,7 @@ impl MzcHeader {
 
     /// 현재 헤더 정보의 버전에 부합하는 고정 바이트 배열(`Vec<u8>`)로 직렬화합니다.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let size = if self.version == VERSION_MZC2 || self.version == VERSION_MZC3 || self.version == VERSION_MZC4 || self.version == VERSION_MZC5 {
+        let size = if self.version >= VERSION_MZC2 {
             HEADER_SIZE_MZC2
         } else {
             HEADER_SIZE_MZC1
@@ -163,8 +186,8 @@ impl MzcHeader {
         // 5. Payload Size (8 bytes, little-endian)
         bytes.extend_from_slice(&self.payload_size.to_le_bytes());
 
-        // MZC2(버전 2), MZC3(버전 3), MZC4(버전 4) 및 MZC5(버전 5) 전용 필드 직렬화
-        if self.version == VERSION_MZC2 || self.version == VERSION_MZC3 || self.version == VERSION_MZC4 || self.version == VERSION_MZC5 {
+        // MZC2 이상 전용 필드 직렬화
+        if self.version >= VERSION_MZC2 {
             // 6. Dictionary Size (2 bytes, little-endian)
             bytes.extend_from_slice(&self.dictionary_size.to_le_bytes());
         }
@@ -444,10 +467,64 @@ impl MzcHeader {
                 dictionary_size,
                 original_sha256,
             })
+        } else if magic == *MAGIC_MZC6 {
+            // ================== MZC6 (56바이트) 파싱 ==================
+            if bytes.len() < HEADER_SIZE_MZC6 {
+                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+            }
+
+            let version = bytes[4];
+            if version != VERSION_MZC6 {
+                return Err(MzcError::InvalidVersion {
+                    expected: VERSION_MZC6,
+                    found: version,
+                });
+            }
+
+            let algorithm_type = bytes[5];
+            let core_alg = algorithm_type & 0x0F;
+            if core_alg != ALGORITHM_RLE
+                && core_alg != ALGORITHM_DICT
+                && core_alg != ALGORITHM_HYBRID
+                && core_alg != ALGORITHM_LZ77
+            {
+                return Err(MzcError::InvalidAlgorithm {
+                    expected: ALGORITHM_LZ77,
+                    found: core_alg,
+                });
+            }
+
+            let original_size_bytes: [u8; 8] = bytes[6..14]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let original_size = u64::from_le_bytes(original_size_bytes);
+
+            let payload_size_bytes: [u8; 8] = bytes[14..22]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let payload_size = u64::from_le_bytes(payload_size_bytes);
+
+            let dictionary_size_bytes: [u8; 2] = bytes[22..24]
+                .try_into()
+                .expect("u16 사전크기 파싱용 2바이트 슬라이스 획득");
+            let dictionary_size = u16::from_le_bytes(dictionary_size_bytes);
+
+            let mut original_sha256 = [0u8; 32];
+            original_sha256.copy_from_slice(&bytes[24..56]);
+
+            Ok(Self {
+                magic,
+                version,
+                algorithm_type,
+                original_size,
+                payload_size,
+                dictionary_size,
+                original_sha256,
+            })
         } else {
             // 매직넘버 모두 틀린 규정 외 오염 파일
             let found = String::from_utf8_lossy(&magic).into_owned();
-            let expected = "MZC1, MZC2, MZC3, MZC4 or MZC5".to_string();
+            let expected = "MZC1 to MZC6".to_string();
             Err(MzcError::InvalidMagic { expected, found })
         }
     }

@@ -181,3 +181,40 @@ fn test_huffman_dynamic_direct() {
     let decompressed = mzc::huffman::huffman_decompress_dynamic(&compressed, input.len()).unwrap();
     assert_eq!(input, decompressed.as_slice());
 }
+
+#[test]
+fn test_ans_direct() {
+    let input = b"Hello world! This is a test for Table-based Asymmetric Numeral Systems (tANS) directly.";
+    let compressed = mzc::ans::ans_compress(input).unwrap();
+    let decompressed = mzc::ans::ans_decompress(&compressed, input.len()).unwrap();
+    assert_eq!(input, decompressed.as_slice());
+}
+
+#[test]
+fn test_ans_roundtrip() {
+    let input = b"tANS compression roundtrip through the library pipeline test! Repeating repeating repeating...";
+    let compressed = mzc::compress_bytes_v2(input, CompressionMode::Hybrid, EntropyMode::Ans, 6, false, false);
+    let restored = mzc::decompress_bytes_v2(&compressed).expect("Ans decompress failed");
+    assert_eq!(input, restored.as_slice());
+}
+
+#[test]
+fn test_dictionary_training_roundtrip() {
+    let sample1 = b"The quick brown fox jumps over the lazy dog.";
+    let sample2 = b"A quick brown fox jumped over the lazy dogs and ran away.";
+    let mut concat = Vec::new();
+    concat.extend_from_slice(sample1);
+    concat.extend_from_slice(sample2);
+    
+    let dict = mzc::rle::build_dictionary(&concat);
+    let dict_bytes = dict.to_bytes();
+    
+    let input = b"The quick brown fox jumps over the lazy dog. A quick brown fox jumped!";
+    let compressed = mzc::compress_bytes_v2_dict(input, CompressionMode::Hybrid, EntropyMode::Ans, 6, false, false, Some(&dict_bytes));
+    
+    let restored = mzc::decompress_bytes_v2_dict(&compressed, Some(&dict_bytes)).expect("Decompress with trained dict failed");
+    assert_eq!(input, restored.as_slice());
+    
+    let restored_embedded = mzc::decompress_bytes_v2(&compressed).expect("Decompress with embedded dict failed");
+    assert_eq!(input, restored_embedded.as_slice());
+}
