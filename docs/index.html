@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MZC (Minimal Zip Concept) - Advanced Compression Tool</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-dark: #0a0a0c;
+            --bg-card: rgba(22, 22, 28, 0.7);
+            --primary: #2dce89;
+            --primary-glow: rgba(45, 206, 137, 0.4);
+            --secondary: #2979ff;
+            --secondary-glow: rgba(41, 121, 255, 0.4);
+            --accent: #ffc400;
+            --text-main: #f1f1f6;
+            --text-muted: #9fa0a6;
+            --border: rgba(255, 255, 255, 0.08);
+            --font-main: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            line-height: 1.6;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(41, 121, 255, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(45, 206, 137, 0.05) 0%, transparent 40%);
+            background-attachment: fixed;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* Navigation */
+        nav {
+            padding: 24px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 10, 12, 0.8);
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-img {
+            width: 42px;
+            height: 42px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        .logo-text {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 0%, var(--text-muted) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+
+        .nav-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 80px 0;
+            display: flex;
+            align-items: center;
+            gap: 64px;
+        }
+
+        .hero-info {
+            flex: 1.2;
+        }
+
+        .hero-badge {
+            background: rgba(45, 206, 137, 0.1);
+            color: var(--primary);
+            padding: 6px 12px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 24px;
+            border: 1px solid rgba(45, 206, 137, 0.2);
+            box-shadow: 0 0 15px rgba(45, 206, 137, 0.05);
+        }
+
+        .hero-title {
+            font-size: 56px;
+            font-weight: 800;
+            line-height: 1.1;
+            letter-spacing: -2px;
+            margin-bottom: 24px;
+            background: linear-gradient(135deg, #ffffff 30%, #a5a5b5 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-desc {
+            font-size: 18px;
+            color: var(--text-muted);
+            margin-bottom: 40px;
+            max-width: 600px;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 16px;
+        }
+
+        .btn {
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+            color: #0c0d10;
+            box-shadow: 0 4px 20px var(--primary-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px var(--primary-glow);
+            filter: brightness(1.1);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+            border-color: var(--text-muted);
+        }
+
+        .hero-visual {
+            flex: 1;
+            position: relative;
+        }
+
+        .hero-img {
+            width: 100%;
+            border-radius: 16px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 40px rgba(41, 121, 255, 0.1);
+            border: 1px solid var(--border);
+            transition: transform 0.5s;
+        }
+
+        .hero-img:hover {
+            transform: scale(1.02);
+        }
+
+        /* Features Section */
+        .features {
+            padding: 100px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 64px;
+        }
+
+        .section-title {
+            font-size: 36px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 16px;
+        }
+
+        .section-subtitle {
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 32px;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(45, 206, 137, 0.3);
+            box-shadow: 0 10px 30px rgba(45, 206, 137, 0.05);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            background: rgba(45, 206, 137, 0.1);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 24px;
+        }
+
+        .feature-card:nth-child(2) .feature-icon {
+            background: rgba(41, 121, 255, 0.1);
+            color: var(--secondary);
+        }
+
+        .feature-card:nth-child(3) .feature-icon {
+            background: rgba(255, 196, 0, 0.1);
+            color: var(--accent);
+        }
+
+        .feature-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .feature-desc {
+            color: var(--text-muted);
+            font-size: 15px;
+        }
+
+        /* Spec Tabs Section */
+        .specs {
+            padding: 100px 0;
+            border-top: 1px solid var(--border);
+            background: rgba(22, 22, 28, 0.2);
+        }
+
+        .spec-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: 30px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .tab-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+        }
+
+        .tab-btn.active {
+            background: var(--primary);
+            color: #0c0d10;
+            border-color: var(--primary);
+            box-shadow: 0 4px 15px var(--primary-glow);
+        }
+
+        .spec-content {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px;
+            backdrop-filter: blur(10px);
+            min-height: 380px;
+        }
+
+        .spec-panel {
+            display: none;
+            animation: fadeIn 0.5s;
+        }
+
+        .spec-panel.active {
+            display: flex;
+            gap: 48px;
+        }
+
+        .spec-info {
+            flex: 1.2;
+        }
+
+        .spec-visual {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            padding: 24px;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            color: #5af78e;
+            overflow-x: auto;
+        }
+
+        .spec-tag {
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .spec-name {
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+
+        .spec-desc {
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .spec-list {
+            margin-left: 20px;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .spec-list li {
+            margin-bottom: 8px;
+        }
+
+        /* CLI Guide Section */
+        .guide {
+            padding: 100px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .code-box {
+            background: #0d0e12;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            font-family: var(--font-mono);
+            position: relative;
+            margin-top: 32px;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 16px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .code-body {
+            color: #d1d2d6;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.8;
+        }
+
+        .code-comment {
+            color: #5c6370;
+        }
+
+        .code-keyword {
+            color: #f92672;
+        }
+
+        .code-string {
+            color: #e6db74;
+        }
+
+        .code-value {
+            color: #ae81ff;
+        }
+
+        /* Footer */
+        footer {
+            padding: 48px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (max-width: 900px) {
+            .hero {
+                flex-direction: column;
+                text-align: center;
+                padding: 40px 0;
+            }
+            .hero-actions {
+                justify-content: center;
+            }
+            .hero-desc {
+                margin: 0 auto 40px;
+            }
+            .spec-panel.active {
+                flex-direction: column;
+            }
+            .hero-title {
+                font-size: 40px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Navigation -->
+        <nav>
+            <div class="logo-area">
+                <img src="assets/mzc_app_icon.png" alt="MZC Logo" class="logo-img">
+                <span class="logo-text">MZC Engine</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features">기능</a>
+                <a href="#specs">포맷 규격</a>
+                <a href="#guide">사용법</a>
+                <a href="https://github.com/jeiel85/minimal-zip-concept" target="_blank">GitHub</a>
+            </div>
+        </nav>
+
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="hero-info">
+                <span class="hero-badge">🚀 MZC v5.0.0 출시</span>
+                <h1 class="hero-title">Rust 기반 무손실 압축의 모든 원리를 담다</h1>
+                <p class="hero-desc">
+                    MZC (Minimal Zip Concept)는 단순한 압축기를 넘어, 바이트 단위 및 비트 단위의 직렬화, RLE, 사전 대치, LZ77 슬라이딩 윈도우, 점프 상대 주소 변환(BCJ), 델타 필터 및 Canonical Dynamic Huffman Coding까지 무손실 압축의 실전 구조를 설계하며 학습하는 러스트 지향 압축 엔진입니다.
+                </p>
+                <div class="hero-actions">
+                    <a href="https://github.com/jeiel85/minimal-zip-concept" target="_blank" class="btn btn-primary">
+                        <svg width="18" height="18" fill="currentColor" viewBox="0 0 16 16" style="margin-top: -2px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+                        GitHub 프로젝트 보기
+                    </a>
+                    <a href="#guide" class="btn btn-secondary">빠른 시작</a>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <img src="assets/mzc_landing_image.png" alt="MZC Dashboard Visual" class="hero-img">
+            </div>
+        </section>
+
+        <!-- Features Section -->
+        <section id="features" class="features">
+            <div class="section-header">
+                <h2 class="section-title">주요 고도화 기능 명세</h2>
+                <p class="section-subtitle">압축 오버헤드를 극적으로 배제하고 성능을 조율하기 위해 추가된 주요 요소들입니다.</p>
+            </div>
+            <div class="feature-grid">
+                <!-- Bit-Level Packing -->
+                <div class="feature-card">
+                    <div class="feature-icon">🪙</div>
+                    <h3 class="feature-title">비트 레벨 스트림 패킹</h3>
+                    <p class="feature-desc">블록마다 발생하는 바이트 단위(1B) 타입 오버헤드를 극복하기 위해, 압축 블록 8개마다 2바이트 플래그(2비트 x 8)로 비트 스트림화하여 선두에 기록함으로써 타입 공간을 약 15~25% 절약합니다.</p>
+                </div>
+                <!-- Lazy Matching -->
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3 class="feature-title">지연 매칭 및 압축 레벨</h3>
+                    <p class="feature-desc">그리디 방식의 즉시 매칭을 개선하여, 다음 바이트에서 더 효율적인 LZ77 일치가 발견될 경우 결정을 이월하는 지연 매칭(Lazy Matching) 기법을 탑재하고 압축 레벨(1~9)에 맞춰 연산 강도를 조절합니다.</p>
+                </div>
+                <!-- Preprocessors -->
+                <div class="feature-card">
+                    <div class="feature-icon">🎹</div>
+                    <h3 class="feature-title">데이터 원시 전처리 필터</h3>
+                    <p class="feature-desc">바이너리의 엔트로피를 물리적으로 떨어뜨리는 x86 기계어 타겟 BCJ(Branch-Call-Jump) 상대 번지 대치 필터와 WAV/BMP 등 연속 파형 바이트의 차분값을 계산하는 Delta Filter를 제공합니다.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Specs Tabs Section -->
+        <section id="specs" class="specs">
+            <div class="section-header">
+                <h2 class="section-title">MZC 하위 호환성 포맷 아키텍처</h2>
+                <p class="section-subtitle">MZC 엔진은 버전 1부터 최신 버전 5까지 유연한 이중 파싱 분기(Double-Dispatch)를 수행합니다.</p>
+            </div>
+            
+            <div class="spec-tabs">
+                <button class="tab-btn" onclick="openSpec(event, 'mzc1')">MZC1 (RLE)</button>
+                <button class="tab-btn" onclick="openSpec(event, 'mzc2')">MZC2 (Dictionary)</button>
+                <button class="tab-btn" onclick="openSpec(event, 'mzc3')">MZC3 (LZ77 Chunk)</button>
+                <button class="tab-btn" onclick="openSpec(event, 'mzc4')">MZC4 (Dynamic Huffman)</button>
+                <button class="tab-btn active" onclick="openSpec(event, 'mzc5')">MZC5 (Bit-Packed)</button>
+            </div>
+
+            <div class="spec-content">
+                <!-- Tab MZC1 -->
+                <div id="mzc1" class="spec-panel">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC1 Specification</span>
+                        <h3 class="spec-name">RLE 기반 초급 포맷</h3>
+                        <p class="spec-desc">압축 알고리즘의 기초인 RLE(Run-Length Encoding)를 구현하여, 바이트 단위 직렬화 파이프라인의 구조를 세운 기초 명세입니다.</p>
+                        <ul class="spec-list">
+                            <li>54바이트의 고정 파일 헤더 제공</li>
+                            <li>런 블록(Type 0x01)과 리터럴 블록(Type 0x00)만 사용</li>
+                            <li>단일 스레드 기반의 동작 및 기본 SHA-256 체크섬</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC1"] (4B)
+[Version: 0x01] (1B)
+[Algorithm: RLE] (1B)
+[Original Size] (8B)
+[Payload Size] (8B)
+[Original SHA-256] (32B)
+----------------------
+[Block Type] (1B)
+[Block Length] (2B)
+[Payload Data...]
+                    </pre>
+                </div>
+
+                <!-- Tab MZC2 -->
+                <div id="mzc2" class="spec-panel">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC2 Specification</span>
+                        <h3 class="spec-name">하이브리드 병렬 사전식 압축</h3>
+                        <p class="spec-desc">자주 등장하는 바이트 시퀀스를 사전에 등록하고, 토큰 번호로 일치 항목을 매핑하는 멀티스레드 병렬 압축 규격입니다.</p>
+                        <ul class="spec-list">
+                            <li>Rayon 라이브러리를 동원한 1MB 청크 단위 병렬 맵-리듀스</li>
+                            <li>사전 인프라 추가로 파일 헤더 크기가 56바이트로 확장</li>
+                            <li>RLE와 사전 토큰(Token Block, Type 0x02)의 Hybrid 탑재</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC2"] (4B)
+[Version: 0x02] (1B)
+[Algorithm: Hybrid] (1B)
+[Original Size] (8B)
+[Payload Size] (8B)
+[Dictionary Size] (2B)
+[Original SHA-256] (32B)
+----------------------
+[Dictionary Section]
+[Chunk Block Data...]
+                    </pre>
+                </div>
+
+                <!-- Tab MZC3 -->
+                <div id="mzc3" class="spec-panel">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC3 Specification</span>
+                        <h3 class="spec-name">LZ77 슬라이딩 윈도우 지원</h3>
+                        <p class="spec-desc">데이터의 이전 윈도우 공간에서 반복 영역을 찾아 오프셋 거리(Distance)와 길이(Length) 정보로 인코딩하는 LZ77 사양이 통합되었습니다.</p>
+                        <ul class="spec-list">
+                            <li>백레퍼런스 블록(BackRef Block, Type 0x03) 추가</li>
+                            <li>32KB 크기의 슬라이딩 윈도우 룩어헤드 버퍼 탐색</li>
+                            <li>정적 허프만 코딩을 연동한 2차 비트 스트림 추가 압축</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC3"] (4B)
+[Version: 0x03] (1B)
+[Algorithm: LZ77] (1B)
+... (Same 56B Header)
+----------------------
+[Block Type: 0x03] (1B)
+[Distance offset] (2B)
+[Match length] (2B)
+                    </pre>
+                </div>
+
+                <!-- Tab MZC4 -->
+                <div id="mzc4" class="spec-panel">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC4 Specification</span>
+                        <h3 class="spec-name">Canonical Dynamic Huffman Coding</h3>
+                        <p class="spec-desc">사전 정의된 고정 허프만 트리를 폐기하고, 청크 파일의 엔트로피 빈도수를 실시간 계산하여 최적화된 Canonical 트리를 동적으로 생성합니다.</p>
+                        <ul class="spec-list">
+                            <li>Dynamic Huffman Tree 헤더 크기를 20~40B 미만으로 억제하는 독자 트리 RLE 탑재</li>
+                            <li>심볼 트리 깊이를 30비트 이하로 보장하는 정합 설계</li>
+                            <li>소용량 파일에서 압축 효율 극대화</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC4"] (4B)
+[Version: 0x04] (1B)
+...
+----------------------
+[Compressed Tree RLE Header]
+ - Zero Runs / Non-Zero Runs
+[Bit-Packed Payload stream]
+                    </pre>
+                </div>
+
+                <!-- Tab MZC5 -->
+                <div id="mzc5" class="spec-panel active">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC5 Specification</span>
+                        <h3 class="spec-name">비트 레벨 스트림 패킹 및 하이엔드 전처리</h3>
+                        <p class="spec-desc">바이트 정렬 한계를 완전히 무너뜨리고 8개 단위 플래그로 묶은 비트스트림 구조로 압축 메타데이터 오버헤드를 원천적으로 제거한 최상위 버전입니다.</p>
+                        <ul class="spec-list">
+                            <li>8블록 단위 16비트 플래그 스트림으로 타입 접두사 완전 대체</li>
+                            <li>BCJ 상대 주소 대치 필터 및 Delta 필터 탑재</li>
+                            <li>디스크 쓰기/읽기 및 디코딩 연산 전체에 멀티스레드 정밀 바운드 예외 차단 기술 적용</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC5"] (4B)
+[Version: 0x05] (1B)
+[Algorithm_Flag: Core | Preprocessors] (1B)
+... (56B Header)
+----------------------
+[RLE/Huffman Header Section]
+[Flag Stream: 2bit * 8 blocks] (2B)
+[Sequential Block payload stream...]
+                    </pre>
+                </div>
+            </div>
+        </section>
+
+        <!-- CLI Guide Section -->
+        <section id="guide" class="guide">
+            <div class="section-header">
+                <h2 class="section-title">실행 가이드 및 사용법</h2>
+                <p class="section-subtitle">CLI 커맨드와 미려한 GUI 환경을 모두 동일한 Rust 코어 라이브러리로 이용할 수 있습니다.</p>
+            </div>
+
+            <div class="code-box">
+                <div class="code-header">
+                    <span>PowerShell / Terminal</span>
+                    <span>Rust Cargo</span>
+                </div>
+                <div class="code-body"><span class="code-comment"># 1. 깃 클론 및 폴더 이동</span>
+<span class="code-keyword">git clone</span> https://github.com/jeiel85/minimal-zip-concept.git
+<span class="code-keyword">cd</span> minimal-zip-concept
+
+<span class="code-comment"># 2. 러스트 빌드 (릴리즈 모드)</span>
+<span class="code-keyword">cargo build</span> --release
+
+<span class="code-comment"># 3. CLI를 이용한 고성능 MZC5 압축 실행 (레벨9, Delta 활성화, BCJ 활성화)</span>
+./target/release/mzc compress input.bin output.mzc5 -m lz77 -e dynamic -l 9 --delta --bcj
+
+<span class="code-comment"># 4. 압축 파일 디코딩 및 복원 검사</span>
+./target/release/mzc decompress output.mzc5 restored.bin
+
+<span class="code-comment"># 5. 그래픽 GUI 성능 모니터 대시보드 뷰어 기동</span>
+./target/release/mzc gui</div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer>
+            <div class="container">
+                <p>© 2026 MZC Compression Project. Developed for Learning Advanced Agentic Coding & Lossless Formats.</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Script for Tab switching -->
+    <script>
+        function openSpec(evt, specId) {
+            var i, specPanel, tabBtns;
+            specPanel = document.getElementsByClassName("spec-panel");
+            for (i = 0; i < specPanel.length; i++) {
+                specPanel[i].className = specPanel[i].className.replace(" active", "");
+                specPanel[i].style.display = "none";
+            }
+            tabBtns = document.getElementsByClassName("tab-btn");
+            for (i = 0; i < tabBtns.length; i++) {
+                tabBtns[i].className = tabBtns[i].className.replace(" active", "");
+            }
+            document.getElementById(specId).style.display = "flex";
+            document.getElementById(specId).className += " active";
+            evt.currentTarget.className += " active";
+        }
+
+        // Initialize display for active tab
+        document.getElementById("mzc5").style.display = "flex";
+    </script>
+</body>
+</html>
