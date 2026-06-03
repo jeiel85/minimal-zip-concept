@@ -65,7 +65,7 @@ fn test_truncated_payload_block() {
 fn test_corrupt_payload_checksum_mismatch() {
     // MZC2 고도화 하이브리드+허프만 압축 데이터에 대한 Bit-flip 오염 감지 테스트
     let original_data = b"AAAAHelloBBBBWorldCCCCRepeatedDataZZZZ! This is highly secret binary codes!";
-    let compressed_data = mzc::compress_bytes_v2(original_data, CompressionMode::Hybrid, EntropyMode::Huffman, 6, false, false);
+    let compressed_data = mzc::compress_bytes_v2(original_data, CompressionMode::Hybrid, EntropyMode::Huffman, 6, false, false, false, false);
     
     // 정상은 당연히 디코딩 성공해야 함
     let restored = mzc::decompress_bytes_v2(&compressed_data).expect("정상 복원 실패");
