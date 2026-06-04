@@ -747,10 +747,10 @@
 <span class="code-keyword">cargo build</span> --release
 
 <span class="code-comment"># 3. CLI를 이용한 고성능 MZC7 압축 실행 (CM 모드, PNG 필터 활성화)</span>
-./target/release/mzc compress input_image.png output.mzc7 -m hybrid -e cm --png
+./target/release/mzc compress input_image.png output.mzip -m hybrid -e cm --png
 
 <span class="code-comment"># 4. 압축 파일 디코딩 및 복원 검사</span>
-./target/release/mzc decompress output.mzc7 restored.png
+./target/release/mzc decompress output.mzip restored.png
 
 <span class="code-comment"># 5. GZIP 표준 압축 파일 해제 (RFC 1952 디코딩)</span>
 ./target/release/mzc inflate archive.gz restored.txt

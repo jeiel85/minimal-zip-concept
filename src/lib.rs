@@ -1074,3 +1074,98 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
 
     Ok(())
 }
+
+/// **윈도우 레지스트리에 마우스 우클릭 메뉴(MZC로 압축/해제하기)를 등록합니다.**
+#[cfg(target_os = "windows")]
+pub fn register_context_menu() -> anyhow::Result<()> {
+    use anyhow::Context;
+    let exe_path = std::env::current_exe()
+        .context("현재 실행 파일 경로를 가져올 수 없습니다.")?;
+    let exe_str = exe_path.to_string_lossy();
+    
+    // 1. 파일 우클릭 시 "MZC로 압축하기" 추가
+    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress", "", "MZC로 압축하기")?;
+    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress", "Icon", &exe_str)?;
+    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress\command", "", &format!("\"{}\" compress \"%1\"", exe_str))?;
+
+    // 2. 폴더(디렉토리) 우클릭 시 "MZC로 압축하기" 추가
+    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress", "", "MZC로 압축하기")?;
+    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress", "Icon", &exe_str)?;
+    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress\command", "", &format!("\"{}\" compress \"%1\"", exe_str))?;
+
+    // 3. .mzip 확장자 등록 및 우클릭 시 "MZC로 압축 해제하기" 추가
+    run_reg_add(r"HKCU\Software\Classes\.mzip", "", "MzcArchive")?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive", "", "MZIP 압축 파일")?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "", "MZC로 압축 해제하기")?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "Icon", &exe_str)?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open\command", "", &format!("\"{}\" decompress \"%1\"", exe_str))?;
+    
+    println!("윈도우 마우스 우클릭 메뉴가 성공적으로 등록되었습니다.");
+    Ok(())
+}
+
+/// **윈도우 레지스트리에 마우스 우클릭 추가 용도의 헬퍼 함수 (reg.exe 호출)**
+#[cfg(target_os = "windows")]
+fn run_reg_add(key: &str, val_name: &str, val: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let mut args = vec!["add", key];
+    if !val_name.is_empty() {
+        args.push("/v");
+        args.push(val_name);
+    }
+    args.push("/t");
+    args.push("REG_SZ");
+    args.push("/d");
+    args.push(val);
+    args.push("/f");
+    
+    let status = std::process::Command::new("reg")
+        .args(&args)
+        .status()
+        .context("reg.exe 실행에 실패했습니다.")?;
+        
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("레지스트리 키 등록 실패: {}", key)
+    }
+}
+
+/// **윈도우 레지스트리에서 등록된 마우스 우클릭 메뉴를 제거합니다.**
+#[cfg(target_os = "windows")]
+pub fn unregister_context_menu() -> anyhow::Result<()> {
+    run_reg_delete(r"HKCU\Software\Classes\*\shell\MzcCompress")?;
+    run_reg_delete(r"HKCU\Software\Classes\Directory\shell\MzcCompress")?;
+    run_reg_delete(r"HKCU\Software\Classes\.mzip")?;
+    run_reg_delete(r"HKCU\Software\Classes\MzcArchive")?;
+    println!("윈도우 마우스 우클릭 메뉴가 성공적으로 해제되었습니다.");
+    Ok(())
+}
+
+/// **윈도우 레지스트리에 키 제거 용도의 헬퍼 함수 (reg.exe 호출)**
+#[cfg(target_os = "windows")]
+fn run_reg_delete(key: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let status = std::process::Command::new("reg")
+        .args(&["delete", key, "/f"])
+        .status()
+        .context("reg.exe 실행에 실패했습니다.")?;
+        
+    if status.success() {
+        Ok(())
+    } else {
+        // 이미 지워졌거나 없어도 스킵할 수 있게 에러를 내지 않고 넘어갑니다.
+        Ok(())
+    }
+}
+
+// 윈도우가 아닌 운영체제를 위한 스텁(Stub) 함수 정의
+#[cfg(not(target_os = "windows"))]
+pub fn register_context_menu() -> anyhow::Result<()> {
+    anyhow::bail!("마우스 우클릭 메뉴 등록은 Windows 플랫폼에서만 지원됩니다.")
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn unregister_context_menu() -> anyhow::Result<()> {
+    anyhow::bail!("마우스 우클릭 메뉴 해제는 Windows 플랫폼에서만 지원됩니다.")
+}

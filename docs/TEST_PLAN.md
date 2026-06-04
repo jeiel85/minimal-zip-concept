@@ -175,9 +175,9 @@ Expected:
 cargo build
 cargo test
 
-cargo run -- compress samples/repeated.txt samples/repeated.mzc
-cargo run -- inspect samples/repeated.mzc
-cargo run -- decompress samples/repeated.mzc samples/repeated.restored.txt
+cargo run -- compress samples/repeated.txt samples/repeated.mzip
+cargo run -- inspect samples/repeated.mzip
+cargo run -- decompress samples/repeated.mzip samples/repeated.restored.txt
 cargo run -- test samples/repeated.txt
 ```
 

@@ -35,7 +35,28 @@ fn main() -> Result<()> {
             lpc, 
             dict_file 
         } => {
-            println!("압축 시작: {:?} -> {:?}", input_file, output_file);
+            // 폴더 압축 검증
+            if input_file.is_dir() {
+                anyhow::bail!("폴더 압축은 지원하지 않습니다. 단일 파일로 먼저 패킹하거나 단일 파일을 선택해 주세요.");
+            }
+
+            // 출력 파일 경로 자동 추론
+            let out_file = match output_file {
+                Some(path) => path,
+                None => {
+                    let mut path = input_file.clone();
+                    if let Some(ext) = path.extension() {
+                        let mut new_ext = ext.to_os_string();
+                        new_ext.push(".mzip");
+                        path.set_extension(new_ext);
+                    } else {
+                        path.set_extension("mzip");
+                    }
+                    path
+                }
+            };
+
+            println!("압축 시작: {:?} -> {:?}", input_file, out_file);
             println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}", 
                      mode, entropy, level, delta, bcj, png, lpc);
             if let Some(ref path) = dict_file {
@@ -72,8 +93,8 @@ fn main() -> Result<()> {
             );
 
             // 최종 압축 파일 디스크에 저장
-            fs::write(&output_file, &final_output)
-                .with_context(|| format!("압축 파일 '{:?}'을 저장하는 데 실패했습니다.", output_file))?;
+            fs::write(&out_file, &final_output)
+                .with_context(|| format!("압축 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
 
             // 압축 성능 보고
             let total_compressed_size = final_output.len();
@@ -93,7 +114,23 @@ fn main() -> Result<()> {
 
         // --- 압축 해제 (Decompress) 서브커맨드 실행 분기 ---
         Commands::Decompress { input_file, output_file, dict_file } => {
-            println!("압축 해제 시작: {:?} -> {:?}", input_file, output_file);
+            // 출력 파일 경로 자동 추론
+            let out_file = match output_file {
+                Some(path) => path,
+                None => {
+                    let mut path = input_file.clone();
+                    if path.extension().map_or(false, |ext| ext == "mzip") {
+                        path.set_extension(""); // Remove .mzip extension
+                    } else {
+                        let mut new_ext = path.extension().unwrap_or_default().to_os_string();
+                        new_ext.push(".extracted");
+                        path.set_extension(new_ext);
+                    }
+                    path
+                }
+            };
+
+            println!("압축 해제 시작: {:?} -> {:?}", input_file, out_file);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
@@ -113,11 +150,11 @@ fn main() -> Result<()> {
 
             // 라이브러리의 검증 포함 통합 병렬 청크 압축 해제 파이프라인 구동
             let decompressed_bytes = mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
-                .context("MZC 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
+                .context("MZIP 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
 
             // 복원된 파일 디스크 저장
-            fs::write(&output_file, &decompressed_bytes)
-                .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", output_file))?;
+            fs::write(&out_file, &decompressed_bytes)
+                .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
 
             let restored_hash_hex = bytes_to_hex(&calculate_sha256(&decompressed_bytes));
 
@@ -252,6 +289,16 @@ fn main() -> Result<()> {
         Commands::Gui => {
             println!("MZC 데스크톱 GUI 애플리케이션을 시작합니다...");
             mzc::gui::run_gui_app().map_err(|e| anyhow::anyhow!("GUI 앱 구동 실패: {}", e))?;
+        }
+
+        // --- 윈도우 마우스 우클릭 메뉴 등록 실행 분기 ---
+        Commands::RegisterContextMenu => {
+            mzc::register_context_menu()?;
+        }
+
+        // --- 윈도우 마우스 우클릭 메뉴 해제 실행 분기 ---
+        Commands::UnregisterContextMenu => {
+            mzc::unregister_context_menu()?;
         }
     }
 

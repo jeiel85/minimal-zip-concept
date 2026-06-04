@@ -21,4 +21,7 @@ rfd = "0.12"
 egui_plot = "0.26"
 flate2 = "1.1.9"
 zstd = "0.13.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = { version = "2.9", features = ["tls"] }
 

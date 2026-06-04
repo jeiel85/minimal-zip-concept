@@ -35,6 +35,13 @@ pub fn run_gui_app() -> Result<(), eframe::Error> {
     )
 }
 
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub url: String,
+    pub changelog: String,
+}
+
 /// **GUI 비동기 스레드 작업 결과를 수집하기 위한 채널 데이터 열거형입니다.**
 ///
 /// 압축이나 검사는 파일이 클수록 1초 이상 걸려 화면을 멈추게 하므로,
@@ -92,6 +99,9 @@ enum TaskResult {
         gzip_time: f64,
         zstd_time: f64,
     },
+    UpdateCheckResult(Result<UpdateInfo, String>),
+    UpdateDownloadProgress(f32),
+    UpdateDownloadDone(PathBuf),
     Error(String),
 }
 
@@ -172,6 +182,15 @@ pub struct MzcGuiApp {
     cm_sim_mixed_p: u32,
     cm_sim_autoplay: bool,
     cm_sim_last_step_time: std::time::Instant,
+
+    // 자동 업데이트 및 컨텍스트 메뉴 관련 상태
+    update_checked: bool,
+    update_available: Option<UpdateInfo>,
+    is_checking_update: bool,
+    is_downloading_update: bool,
+    download_progress: f32,
+    show_update_modal: bool,
+    context_menu_status: String,
 }
 
 impl MzcGuiApp {
@@ -242,7 +261,97 @@ impl MzcGuiApp {
             cm_sim_mixed_p: 2048,
             cm_sim_autoplay: false,
             cm_sim_last_step_time: std::time::Instant::now(),
+            update_checked: false,
+            update_available: None,
+            is_checking_update: false,
+            is_downloading_update: false,
+            download_progress: 0.0,
+            show_update_modal: false,
+            context_menu_status: "대기 중".to_string(),
         }
+    }
+
+    fn spawn_check_update_task(&self) {
+        let tx = self.task_sender.clone();
+        std::thread::spawn(move || {
+            let url = "https://raw.githubusercontent.com/jeiel85/minimal-zip-concept/main/docs/latest_version.json";
+            match ureq::get(url).call() {
+                Ok(response) => {
+                    match serde_json::from_reader::<_, UpdateInfo>(response.into_reader()) {
+                        Ok(info) => {
+                            let current_version = env!("CARGO_PKG_VERSION");
+                            if is_newer_version(&info.version, current_version) {
+                                let _ = tx.send(TaskResult::UpdateCheckResult(Ok(info)));
+                            } else {
+                                let _ = tx.send(TaskResult::UpdateCheckResult(Err("최신 버전을 사용 중입니다.".to_string())));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!("업데이트 정보 파싱 실패: {}", e))));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!("업데이트 서버 연결 실패: {}", e))));
+                }
+            }
+        });
+    }
+
+    fn spawn_download_update_task(&self, download_url: String) {
+        let tx = self.task_sender.clone();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            match ureq::get(&download_url).call() {
+                Ok(response) => {
+                    let total_size = response
+                        .header("Content-Length")
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    
+                    let temp_dir = std::env::temp_dir();
+                    let setup_path = temp_dir.join("mzc-setup.exe");
+                    
+                    match std::fs::File::create(&setup_path) {
+                        Ok(mut file) => {
+                            let mut reader = response.into_reader();
+                            let mut buffer = [0; 16384];
+                            let mut downloaded = 0;
+                            
+                            loop {
+                                match reader.read(&mut buffer) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        use std::io::Write;
+                                        if let Err(e) = file.write_all(&buffer[..n]) {
+                                            let _ = tx.send(TaskResult::Error(format!("다운로드 파일 쓰기 오류: {}", e)));
+                                            return;
+                                        }
+                                        downloaded += n;
+                                        if total_size > 0 {
+                                            let progress = downloaded as f32 / total_size as f32;
+                                            let _ = tx.send(TaskResult::UpdateDownloadProgress(progress));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(TaskResult::Error(format!("다운로드 스트림 오류: {}", e)));
+                                        return;
+                                    }
+                                }
+                            }
+                            
+                            let _ = tx.send(TaskResult::UpdateDownloadDone(setup_path));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(TaskResult::Error(format!("임시 파일 생성 실패: {}", e)));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(TaskResult::Error(format!("다운로드 연결 실패: {}", e)));
+                }
+            }
+        });
     }
 
     /// **비동기 압축 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
@@ -470,21 +579,7 @@ impl MzcGuiApp {
 
                     // 파일 저장
                     let mut saved_path = path.clone();
-                    let ext = if version_mzc7 {
-                        "mzc7"
-                    } else if version_mzc5 {
-                        "mzc5"
-                    } else if entropy == EntropyMode::Dynamic {
-                        "mzc4"
-                    } else {
-                        match mode {
-                            CompressionMode::Rle => "mzc1",
-                            CompressionMode::Dict => "mzc2",
-                            CompressionMode::Hybrid => "mzc2",
-                            CompressionMode::Lz77 => "mzc3",
-                        }
-                    };
-                    saved_path.set_extension(ext);
+                    saved_path.set_extension("mzip");
 
                     let format_desc = if version_mzc7 {
                         "MZC7 - Context Mixing & Media Filters Spec".to_string()
@@ -1171,8 +1266,40 @@ impl eframe::App for MzcGuiApp {
                     self.benchmark_zstd_time = zstd_time;
                     self.benchmark_status = "벤치마크 테스트 완료!".to_string();
                 }
+                TaskResult::UpdateCheckResult(res) => {
+                    self.is_checking_update = false;
+                    self.update_checked = true;
+                    match res {
+                        Ok(info) => {
+                            self.update_available = Some(info);
+                            self.show_update_modal = true;
+                            self.status = "새로운 업데이트 버전이 발견되었습니다!".to_string();
+                        }
+                        Err(e) => {
+                            self.update_available = None;
+                            self.status = format!("업데이트 체크 결과: {}", e);
+                        }
+                    }
+                }
+                TaskResult::UpdateDownloadProgress(progress) => {
+                    self.download_progress = progress;
+                }
+                TaskResult::UpdateDownloadDone(setup_path) => {
+                    self.is_downloading_update = false;
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = std::process::Command::new(setup_path).spawn();
+                        std::process::exit(0);
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        self.status = format!("다운로드 완료: {:?}", setup_path);
+                    }
+                }
                 TaskResult::Error(e) => {
                     self.is_processing = false;
+                    self.is_checking_update = false;
+                    self.is_downloading_update = false;
                     self.status = format!("오류 발생: {}", e);
                     self.train_status = format!("오류 발생: {}", e);
                     self.benchmark_status = format!("오류 발생: {}", e);
@@ -1280,7 +1407,10 @@ impl eframe::App for MzcGuiApp {
                     ui.add_space(6.0);
 
                     if ui.button("📁 압축 대상 파일 열기...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("MZIP Compressed File (*.mzip)", &["mzip"])
+                            .add_filter("All Files (*.*)", &["*"])
+                            .pick_file() {
                             self.input_path = Some(path.clone());
                             self.status = format!("선택 파일: {:?}", path.file_name().unwrap_or(path.as_os_str()));
                         }
@@ -1330,10 +1460,60 @@ impl eframe::App for MzcGuiApp {
                     }
                 });
 
-                ui.add_space(ui.available_height() - 40.0);
+                ui.add_space(ui.available_height() - 150.0);
+                
+                ui.group(|ui| {
+                    ui.label("🌐 시스템 & 관리");
+                    ui.add_space(4.0);
+                    
+                    // 우클릭 컨텍스트 메뉴 제어 (Windows 전용)
+                    ui.horizontal(|ui| {
+                        if ui.button("➕ 우클릭 등록").clicked() {
+                            #[cfg(target_os = "windows")]
+                            {
+                                match crate::register_context_menu() {
+                                    Ok(_) => self.context_menu_status = "등록 성공!".to_string(),
+                                    Err(e) => self.context_menu_status = format!("실패: {}", e),
+                                }
+                            }
+                            #[cfg(not(target_os = "windows"))]
+                            {
+                                self.context_menu_status = "Windows만 지원".to_string();
+                            }
+                        }
+                        if ui.button("➖ 우클릭 해제").clicked() {
+                            #[cfg(target_os = "windows")]
+                            {
+                                match crate::unregister_context_menu() {
+                                    Ok(_) => self.context_menu_status = "해제 성공!".to_string(),
+                                    Err(e) => self.context_menu_status = format!("실패: {}", e),
+                                }
+                            }
+                            #[cfg(not(target_os = "windows"))]
+                            {
+                                self.context_menu_status = "Windows만 지원".to_string();
+                            }
+                        }
+                    });
+                    ui.colored_label(egui::Color32::from_rgb(180, 180, 180), format!("우클릭: {}", self.context_menu_status));
+                    
+                    ui.add_space(6.0);
+                    
+                    // 자동 업데이트 확인 버튼
+                    if ui.add_enabled(!self.is_checking_update && !self.is_downloading_update, egui::Button::new("🌐 최신 업데이트 확인")).clicked() {
+                        self.is_checking_update = true;
+                        self.status = "업데이트 서버에 연결 중...".to_string();
+                        self.spawn_check_update_task();
+                    }
+                    if self.is_checking_update {
+                        ui.spinner();
+                    }
+                });
+
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "✔ MZC Core Engine");
-                    ui.colored_label(egui::Color32::from_rgb(120, 120, 120), "v7.0.0");
+                    ui.colored_label(egui::Color32::from_rgb(120, 120, 120), format!("v{}", env!("CARGO_PKG_VERSION")));
                 });
             });
 
@@ -1887,7 +2067,71 @@ impl eframe::App for MzcGuiApp {
             }
         });
 
+        // 업데이트 권장 팝업창 모달
+        if self.show_update_modal {
+            if let Some(ref info) = self.update_available {
+                let version = info.version.clone();
+                let url = info.url.clone();
+                let changelog = info.changelog.clone();
+                
+                let mut show = true;
+                let mut close_clicked = false;
+                egui::Window::new("🌐 새로운 업데이트 발견")
+                    .open(&mut show)
+                    .resizable(false)
+                    .collapsible(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ctx, |ui| {
+                        ui.set_max_width(400.0);
+                        ui.heading(format!("MZC v{} 출시!", version));
+                        ui.add_space(10.0);
+                        
+                        ui.label("변경 내용:");
+                        ui.group(|ui| {
+                            ui.label(&changelog);
+                        });
+                        ui.add_space(15.0);
+                        
+                        if self.is_downloading_update {
+                            ui.horizontal(|ui| {
+                                ui.label("다운로드 중...");
+                                ui.add(egui::ProgressBar::new(self.download_progress).show_percentage());
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                if ui.button("⚡ 업데이트 및 설치").clicked() {
+                                    self.is_downloading_update = true;
+                                    self.spawn_download_update_task(url);
+                                }
+                                if ui.button("닫기").clicked() {
+                                    close_clicked = true;
+                                }
+                            });
+                        }
+                    });
+                if !show || close_clicked {
+                    self.show_update_modal = false;
+                }
+            }
+        }
+
         // 비동기 채널 폴링 반응성 확보
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
+}
+
+fn is_newer_version(new_ver: &str, current_ver: &str) -> bool {
+    let new_parts: Vec<&str> = new_ver.split('.').collect();
+    let curr_parts: Vec<&str> = current_ver.split('.').collect();
+    
+    for i in 0..std::cmp::min(new_parts.len(), curr_parts.len()) {
+        let n = new_parts[i].parse::<u32>().unwrap_or(0);
+        let c = curr_parts[i].parse::<u32>().unwrap_or(0);
+        if n > c {
+            return true;
+        } else if n < c {
+            return false;
+        }
+    }
+    new_parts.len() > curr_parts.len()
 }
