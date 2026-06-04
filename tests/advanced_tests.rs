@@ -80,6 +80,36 @@ fn test_lpc_simd_correctness() {
 }
 
 #[test]
+fn test_png_simd_correctness() {
+    // Generate a 4096-byte array (2 rows of 2048 bytes) with gradient values
+    let mut data = vec![0u8; 4096];
+    for i in 0..4096 {
+        data[i] = (i % 251) as u8;
+    }
+    let orig = data.clone();
+
+    // 1. Run with SIMD enabled
+    mzc::ENABLE_SIMD.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut simd_data = data.clone();
+    mzc::filters::apply_png_filter(&mut simd_data);
+
+    // 2. Run with SIMD disabled
+    mzc::ENABLE_SIMD.store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut scalar_data = data.clone();
+    mzc::filters::apply_png_filter(&mut scalar_data);
+
+    // Both should produce identical filtered output
+    assert_eq!(simd_data, scalar_data);
+
+    // 3. Verify undo works
+    mzc::filters::inverse_png_filter(&mut simd_data);
+    assert_eq!(simd_data, orig);
+
+    // Restore SIMD setting
+    mzc::ENABLE_SIMD.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[test]
 fn test_streaming_roundtrip() {
     // Let's test a larger text block (approx 50KB) to verify block-based streaming
     let mut text = String::new();

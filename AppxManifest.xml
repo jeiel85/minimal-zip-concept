@@ -5,19 +5,22 @@
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:desktop11="http://schemas.microsoft.com/appx/manifest/desktop/windows10/11"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 desktop desktop5 rescap">
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  IgnorableNamespaces="uap uap3 desktop desktop5 desktop11 rescap uap10">
 
   <Identity
     Name="MinimalZipConcept.Mzc"
     Publisher="CN=Antigravity"
-    Version="0.10.0.0"
+    Version="0.11.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>Minimal Zip Concept (MZC)</DisplayName>
     <PublisherDisplayName>Antigravity</PublisherDisplayName>
     <Logo>assets\mzc_app_icon.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
 
   <Resources>
@@ -53,25 +56,25 @@
               <uap:FileType>.mzc</uap:FileType>
             </uap:SupportedFileTypes>
             <uap2:SupportedVerbs xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2">
-              <uap2:Verb Id="open" Parameters="decompress &quot;%1&quot;">Open</uap2:Verb>
+              <uap2:Verb Id="open">Open</uap2:Verb>
             </uap2:SupportedVerbs>
           </uap3:FileTypeAssociation>
         </uap3:Extension>
 
-        <!-- Windows 11 Modern Context Menu (desktop5) -->
-        <desktop5:Extension Category="windows.contextMenu">
-          <desktop5:ContextMenu>
-            <desktop5:Verb Id="CompressWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="*">
-              <desktop5:VerbDisplayName>MZC로 압축하기 (Compress with MZC)</desktop5:VerbDisplayName>
-            </desktop5:Verb>
-            <desktop5:Verb Id="CompressFolderWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="Folder">
-              <desktop5:VerbDisplayName>MZC로 폴더 압축하기 (Compress folder with MZC)</desktop5:VerbDisplayName>
-            </desktop5:Verb>
-            <desktop5:Verb Id="DecompressWithMzc" Attributes="0" CommandParameter="decompress &quot;%1&quot;" Context=".mzc">
-              <desktop5:VerbDisplayName>MZC로 압축 해제하기 (Decompress with MZC)</desktop5:VerbDisplayName>
-            </desktop5:Verb>
-          </desktop5:ContextMenu>
-        </desktop5:Extension>
+        <!-- Windows 11 Modern Context Menu (desktop11) -->
+        <desktop11:Extension Category="windows.contextMenu">
+          <desktop11:ContextMenu>
+            <desktop11:Verb Id="CompressWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="*">
+              <desktop11:VerbDisplayName>MZC로 압축하기 (Compress with MZC)</desktop11:VerbDisplayName>
+            </desktop11:Verb>
+            <desktop11:Verb Id="CompressFolderWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="Folder">
+              <desktop11:VerbDisplayName>MZC로 폴더 압축하기 (Compress folder with MZC)</desktop11:VerbDisplayName>
+            </desktop11:Verb>
+            <desktop11:Verb Id="DecompressWithMzc" Attributes="0" CommandParameter="decompress &quot;%1&quot;" Context=".mzc">
+              <desktop11:VerbDisplayName>MZC로 압축 해제하기 (Decompress with MZC)</desktop11:VerbDisplayName>
+            </desktop11:Verb>
+          </desktop11:ContextMenu>
+        </desktop11:Extension>
       </Extensions>
     </Application>
   </Applications>

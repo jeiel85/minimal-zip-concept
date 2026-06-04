@@ -18,7 +18,26 @@ use mzc::inspect::inspect_mzc_file;
 ///   성공 시 `Ok(())`를, 실패 시 `Err(오류내용)`를 반환하며, CLI 구동 중 생기는 모든 오류는 자동으로 포착되어 터미널에 에러 로그로 표출됩니다.
 fn main() -> Result<()> {
     // 1. CLI 명령줄 인자를 자동으로 분석하고 파싱합니다.
-    let cli = Cli::parse();
+    // 만약 단일 파일/폴더 경로가 입력되었을 경우 서브커맨드(compress/decompress)를 자동으로 보정하여 제공합니다.
+    let mut args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 {
+        let first_arg = &args[1];
+        let subcommands = [
+            "compress", "decompress", "test", "train", "inspect", "inflate", "gui",
+            "register-context-menu", "unregister-context-menu", "-h", "--help", "-V", "--version"
+        ];
+        if !subcommands.contains(&first_arg.as_str()) {
+            let path = std::path::Path::new(first_arg);
+            if path.exists() {
+                if path.extension().map_or(false, |ext| ext == "mzc") {
+                    args.insert(1, "decompress".to_string());
+                } else {
+                    args.insert(1, "compress".to_string());
+                }
+            }
+        }
+    }
+    let cli = Cli::parse_from(args);
 
     // 2. 입력받은 서브커맨드(Commands)에 맞춰 패턴 매칭 분기를 수행합니다.
     match cli.command {

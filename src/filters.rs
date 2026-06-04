@@ -37,36 +37,218 @@ fn paeth_predictor(a: u8, b: u8, c: u8) -> u8 {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn paeth_predictor_avx2(
+    va: std::arch::x86_64::__m256i,
+    vb: std::arch::x86_64::__m256i,
+    vc: std::arch::x86_64::__m256i,
+) -> std::arch::x86_64::__m256i {
+    use std::arch::x86_64::*;
+    let zero = _mm256_setzero_si256();
+    
+    let va_lo = _mm256_unpacklo_epi8(va, zero);
+    let va_hi = _mm256_unpackhi_epi8(va, zero);
+    
+    let vb_lo = _mm256_unpacklo_epi8(vb, zero);
+    let vb_hi = _mm256_unpackhi_epi8(vb, zero);
+    
+    let vc_lo = _mm256_unpacklo_epi8(vc, zero);
+    let vc_hi = _mm256_unpackhi_epi8(vc, zero);
+    
+    // Process low 16 elements
+    let p_lo = _mm256_sub_epi16(_mm256_add_epi16(va_lo, vb_lo), vc_lo);
+    let pa_lo = _mm256_abs_epi16(_mm256_sub_epi16(p_lo, va_lo));
+    let pb_lo = _mm256_abs_epi16(_mm256_sub_epi16(p_lo, vb_lo));
+    let pc_lo = _mm256_abs_epi16(_mm256_sub_epi16(p_lo, vc_lo));
+    
+    let cond_pa_le_pb_lo = _mm256_cmpeq_epi16(_mm256_min_epi16(pa_lo, pb_lo), pa_lo);
+    let cond_pa_le_pc_lo = _mm256_cmpeq_epi16(_mm256_min_epi16(pa_lo, pc_lo), pa_lo);
+    let mask_a_lo = _mm256_and_si256(cond_pa_le_pb_lo, cond_pa_le_pc_lo);
+    let cond_pb_le_pc_lo = _mm256_cmpeq_epi16(_mm256_min_epi16(pb_lo, pc_lo), pb_lo);
+    
+    let res_bc_lo = _mm256_blendv_epi8(vc_lo, vb_lo, cond_pb_le_pc_lo);
+    let res_lo = _mm256_blendv_epi8(res_bc_lo, va_lo, mask_a_lo);
+    
+    // Process high 16 elements
+    let p_hi = _mm256_sub_epi16(_mm256_add_epi16(va_hi, vb_hi), vc_hi);
+    let pa_hi = _mm256_abs_epi16(_mm256_sub_epi16(p_hi, va_hi));
+    let pb_hi = _mm256_abs_epi16(_mm256_sub_epi16(p_hi, vb_hi));
+    let pc_hi = _mm256_abs_epi16(_mm256_sub_epi16(p_hi, vc_hi));
+    
+    let cond_pa_le_pb_hi = _mm256_cmpeq_epi16(_mm256_min_epi16(pa_hi, pb_hi), pa_hi);
+    let cond_pa_le_pc_hi = _mm256_cmpeq_epi16(_mm256_min_epi16(pa_hi, pc_hi), pa_hi);
+    let mask_a_hi = _mm256_and_si256(cond_pa_le_pb_hi, cond_pa_le_pc_hi);
+    let cond_pb_le_pc_hi = _mm256_cmpeq_epi16(_mm256_min_epi16(pb_hi, pc_hi), pb_hi);
+    
+    let res_bc_hi = _mm256_blendv_epi8(vc_hi, vb_hi, cond_pb_le_pc_hi);
+    let res_hi = _mm256_blendv_epi8(res_bc_hi, va_hi, mask_a_hi);
+    _mm256_packus_epi16(res_lo, res_hi)
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn paeth_predictor_neon(
+    va: std::arch::aarch64::uint8x16_t,
+    vb: std::arch::aarch64::uint8x16_t,
+    vc: std::arch::aarch64::uint8x16_t,
+) -> std::arch::aarch64::uint8x16_t {
+    use std::arch::aarch64::*;
+    
+    let va_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(va)));
+    let va_hi = vreinterpretq_s16_u16(vmovl_high_u8(va));
+    
+    let vb_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(vb)));
+    let vb_hi = vreinterpretq_s16_u16(vmovl_high_u8(vb));
+    
+    let vc_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(vc)));
+    let vc_hi = vreinterpretq_s16_u16(vmovl_high_u8(vc));
+    
+    let p_lo = vsubq_s16(vaddq_s16(va_lo, vb_lo), vc_lo);
+    let pa_lo = vabsq_s16(vsubq_s16(p_lo, va_lo));
+    let pb_lo = vabsq_s16(vsubq_s16(p_lo, vb_lo));
+    let pc_lo = vabsq_s16(vsubq_s16(p_lo, vc_lo));
+    
+    let cond_pa_le_pb_lo = vcleq_s16(pa_lo, pb_lo);
+    let cond_pa_le_pc_lo = vcleq_s16(pa_lo, pc_lo);
+    let mask_a_lo = vandq_u16(cond_pa_le_pb_lo, cond_pa_le_pc_lo);
+    let cond_pb_le_pc_lo = vcleq_s16(pb_lo, pc_lo);
+    
+    let res_bc_lo = vreinterpretq_s16_u16(vbslq_u16(
+        cond_pb_le_pc_lo,
+        vreinterpretq_u16_s16(vb_lo),
+        vreinterpretq_u16_s16(vc_lo),
+    ));
+    let res_lo = vreinterpretq_s16_u16(vbslq_u16(
+        mask_a_lo,
+        vreinterpretq_u16_s16(va_lo),
+        vreinterpretq_u16_s16(res_bc_lo),
+    ));
+    
+    let p_hi = vsubq_s16(vaddq_s16(va_hi, vb_hi), vc_hi);
+    let pa_hi = vabsq_s16(vsubq_s16(p_hi, va_hi));
+    let pb_hi = vabsq_s16(vsubq_s16(p_hi, vb_hi));
+    let pc_hi = vabsq_s16(vsubq_s16(p_hi, vc_hi));
+    
+    let cond_pa_le_pb_hi = vcleq_s16(pa_hi, pb_hi);
+    let cond_pa_le_pc_hi = vcleq_s16(pa_hi, pc_hi);
+    let mask_a_hi = vandq_u16(cond_pa_le_pb_hi, cond_pa_le_pc_hi);
+    let cond_pb_le_pc_hi = vcleq_s16(pb_hi, pc_hi);
+    
+    let res_bc_hi = vreinterpretq_s16_u16(vbslq_u16(
+        cond_pb_le_pc_hi,
+        vreinterpretq_u16_s16(vb_hi),
+        vreinterpretq_u16_s16(vc_hi),
+    ));
+    let res_hi = vreinterpretq_s16_u16(vbslq_u16(
+        mask_a_hi,
+        vreinterpretq_u16_s16(va_hi),
+        vreinterpretq_u16_s16(res_bc_hi),
+    ));
+    
+    let packed_lo = vqmovun_s16(res_lo);
+    let packed_hi = vqmovun_s16(res_hi);
+    
+    vcombine_u8(packed_lo, packed_hi)
+}
+
 /// **PNG 스타일의 Paeth 필터를 이미지 바이트 배열 전체에 적용(인코딩)합니다.**
-///
-/// [알고리즘 및 Rust 문법 설명]
-/// - &mut [u8]: 
-///   * `&`는 주소값을 넘겨주는 참조자(Reference)입니다.
-///   * `mut`는 이 함수 내부에서 해당 변수 안의 데이터 값을 수정(Mutate)할 수 있도록 허락해 주는 키워드입니다.
-///   * `[u8]`은 바이트의 크기가 정해지지 않은 메모리 연속 영역(슬라이스)을 나타냅니다.
 pub fn apply_png_filter(data: &mut [u8]) {
-    // 이미지의 한 행(가로 폭)의 크기를 2048바이트로 상정합니다. (표준 폭 규격)
+    let n = data.len();
+    if n == 0 {
+        return;
+    }
+    
     let width = 2048;
-    
-    // [Rust 기초 설명 - 메모리 소유권과 복사]
-    // - `data.to_vec()`: 원본 data 슬라이스가 가리키는 실제 데이터를 힙(Heap) 공간에 완벽히 복사하여 
-    //   새로운 동적 배열 벡터 `Vec<u8>`를 만듭니다.
-    // - 앞부분 픽셀 필터링 결과가 뒷부분 연산에 혼선을 주는 것을 막기 위해 원본 상태의 복제본 `orig`이 필요합니다.
     let orig = data.to_vec();
+    let _simd_enabled = crate::ENABLE_SIMD.load(std::sync::atomic::Ordering::Relaxed);
     
-    // `0..data.len()`: 0부터 data 배열의 전체 크기 직전까지 1씩 순차적으로 전진하는 반복 범위 루프입니다.
-    for i in 0..data.len() {
-        // [경계 조건 체크와 주변 픽셀 조회]
-        // - `i % width`: 현재 바이트 인덱스가 줄(Row)의 몇 번째 열인지 체크합니다.
-        // - RGBA 4채널 픽셀 색상 구성을 가용하므로 왼쪽 픽셀은 `i - 4`에 위치합니다.
-        // - 경계를 넘어가거나 첫 줄인 경우 데이터가 존재하지 않으므로 디폴트값인 0으로 대체합니다.
+    // Width가 2048의 배수이고 SIMD가 활성화된 경우 줄별 병렬화 가속 적용
+    if _simd_enabled && n % width == 0 {
+        let rows = n / width;
+        
+        for r in 0..rows {
+            let row_start = r * width;
+            
+            if r == 0 {
+                // 첫 행: 위쪽이 0이므로 순수 Delta (a 만 사용)
+                for col in 0..4 {
+                    data[row_start + col] = orig[row_start + col];
+                }
+                for col in 4..width {
+                    data[row_start + col] = orig[row_start + col].wrapping_sub(orig[row_start + col - 4]);
+                }
+                continue;
+            }
+            
+            // 두 번째 행부터: 처음 4열은 left=0, upleft=0이므로 paeth_predictor(0, up, 0) = up
+            for col in 0..4 {
+                let up = orig[row_start + col - width];
+                data[row_start + col] = orig[row_start + col].wrapping_sub(up);
+            }
+            
+            let mut col = 4;
+            
+            // x86_64 AVX2 가속 (32바이트씩 병렬 처리)
+            #[cfg(target_arch = "x86_64")]
+            {
+                if is_x86_feature_detected!("avx2") {
+                    while col + 31 < width {
+                        let idx = row_start + col;
+                        unsafe {
+                            use std::arch::x86_64::*;
+                            let curr_v = _mm256_loadu_si256(orig[idx..].as_ptr() as *const __m256i);
+                            let left_v = _mm256_loadu_si256(orig[idx - 4..].as_ptr() as *const __m256i);
+                            let up_v = _mm256_loadu_si256(orig[idx - width..].as_ptr() as *const __m256i);
+                            let upleft_v = _mm256_loadu_si256(orig[idx - width - 4..].as_ptr() as *const __m256i);
+                            
+                            let pred_v = paeth_predictor_avx2(left_v, up_v, upleft_v);
+                            let res_v = _mm256_sub_epi8(curr_v, pred_v);
+                            
+                            _mm256_storeu_si256(data[idx..].as_mut_ptr() as *mut __m256i, res_v);
+                        }
+                        col += 32;
+                    }
+                }
+            }
+            
+            // ARM64 NEON 가속 (16바이트씩 병렬 처리)
+            #[cfg(target_arch = "aarch64")]
+            {
+                while col + 15 < width {
+                    let idx = row_start + col;
+                    unsafe {
+                        use std::arch::aarch64::*;
+                        let curr_v = vld1q_u8(orig[idx..].as_ptr());
+                        let left_v = vld1q_u8(orig[idx - 4..].as_ptr());
+                        let up_v = vld1q_u8(orig[idx - width..].as_ptr());
+                        let upleft_v = vld1q_u8(orig[idx - width - 4..].as_ptr());
+                        
+                        let pred_v = paeth_predictor_neon(left_v, up_v, upleft_v);
+                        let res_v = vsubq_u8(curr_v, pred_v);
+                        
+                        vst1q_u8(data[idx..].as_mut_ptr(), res_v);
+                    }
+                    col += 16;
+                }
+            }
+            
+            // 나머지 열에 대한 순차 처리 루프
+            for c in col..width {
+                let idx = row_start + c;
+                let left = orig[idx - 4];
+                let up = orig[idx - width];
+                let upleft = orig[idx - width - 4];
+                data[idx] = orig[idx].wrapping_sub(paeth_predictor(left, up, upleft));
+            }
+        }
+        return;
+    }
+    
+    // 순차 Fallback 처리
+    for i in 0..n {
         let left = if i >= 4 && (i % width) >= 4 { orig[i - 4] } else { 0 };
         let up = if i >= width { orig[i - width] } else { 0 };
         let upleft = if i >= width + 4 && (i % width) >= 4 { orig[i - width - 4] } else { 0 };
-        
-        // [수학 - wrapping_sub]
-        // - Rust는 뺄셈 결과가 0 아래(음수)로 내려갈 때 코드가 폭주하여 죽는(Panic) 것을 기본 방어합니다.
-        // - wrapping_sub는 0 이하로 내려갈 때 255 방향으로 감돌아 정상 뺄셈이 유지되도록 순환 처리를 합니다. (예: 5 - 10 = 251)
         data[i] = orig[i].wrapping_sub(paeth_predictor(left, up, upleft));
     }
 }

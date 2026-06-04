@@ -37,11 +37,11 @@ if ($Uninstall) {
         Write-Host "등록된 MZC AppxPackage를 찾을 수 없습니다." -ForegroundColor Gray
     }
 
-    # TrustedPeople 및 Personal 저장소에서 인증서 삭제
-    $certs = Get-ChildItem "Cert:\CurrentUser\My", "Cert:\CurrentUser\TrustedPeople" | Where-Object { $_.Subject -like "*CN=$PublisherCommonName*" }
+    # TrustedPeople, Personal(My) 및 Root 저장소에서 인증서 삭제 (CurrentUser 및 LocalMachine 양쪽 모두)
+    $certs = Get-ChildItem "Cert:\CurrentUser\My", "Cert:\CurrentUser\TrustedPeople", "Cert:\CurrentUser\Root", "Cert:\LocalMachine\My", "Cert:\LocalMachine\TrustedPeople", "Cert:\LocalMachine\Root" -ErrorAction SilentlyContinue | Where-Object { $_.Subject -like "*CN=$PublisherCommonName*" }
     foreach ($cert in $certs) {
         Write-Host "인증서 삭제 중: $($cert.Thumbprint) ($($cert.Subject))" -ForegroundColor Yellow
-        Remove-Item $_.PSPath
+        Remove-Item $cert.PSPath -Force
     }
     
     # 임시 파일 정리
@@ -65,17 +65,24 @@ if (-not (Test-Path $sdkPath)) {
 $makeappx = $null
 $signtool = $null
 
+Write-Host "Debug: sdkPath is $sdkPath" -ForegroundColor Magenta
 if (Test-Path $sdkPath) {
-    # 최신 버전을 찾기 위해 역정렬
-    $subdirs = Get-ChildItem $sdkPath | Where-Object { $_.PSIsContainer } | Sort-Object Name -Descending
+    Write-Host "Debug: sdkPath exists" -ForegroundColor Magenta
+    $subdirs = Get-ChildItem $sdkPath -Directory | Sort-Object Name -Descending
+    Write-Host "Debug: subdirs count is $($subdirs.Count)" -ForegroundColor Magenta
     foreach ($dir in $subdirs) {
         $x64Path = Join-Path $dir.FullName "x64"
-        if (Test-Path (Join-Path $x64Path "makeappx.exe")) {
-            $makeappx = Join-Path $x64Path "makeappx.exe"
+        $checkPath = Join-Path $x64Path "makeappx.exe"
+        Write-Host "Debug: checking $checkPath - $(Test-Path $checkPath)" -ForegroundColor Magenta
+        if (Test-Path $checkPath) {
+            $makeappx = $checkPath
             $signtool = Join-Path $x64Path "signtool.exe"
+            Write-Host "Debug: Found tools at $x64Path" -ForegroundColor Magenta
             break
         }
     }
+} else {
+    Write-Host "Debug: sdkPath does not exist" -ForegroundColor Magenta
 }
 
 # 시스템 PATH에서도 검색 시도
@@ -127,35 +134,53 @@ Write-Host "MSIX 패키지 생성 완료: $MsixPath" -ForegroundColor Green
 $subject = "CN=$PublisherCommonName"
 Write-Host "인증서를 검사/생성 중: $subject" -ForegroundColor Gray
 
-# 기존 인증서 검색
-$cert = Get-ChildItem "Cert:\CurrentUser\My" | Where-Object { $_.Subject -eq $subject } | Select-Object -First 1
+# 관리자 권한 확인 및 적절한 인증서 저장소 범위(StoreScope) 설정
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$StoreScope = if ($isAdmin) { "LocalMachine" } else { "CurrentUser" }
+Write-Host "실행 권한 감지: isAdmin=$isAdmin (StoreScope=$StoreScope)" -ForegroundColor Cyan
+
+$myStore = "Cert:\$StoreScope\My"
+$cert = Get-ChildItem $myStore | Where-Object { $_.Subject -eq $subject } | Select-Object -First 1
 
 if (-not $cert) {
     Write-Host "인증서가 존재하지 않아 새로 생성합니다..." -ForegroundColor Yellow
     $cert = New-SelfSignedCertificate -Type Custom -Subject $subject `
         -KeyUsage DigitalSignature `
         -FriendlyName "MZC Sparse Package Certificate" `
-        -CertStoreLocation "Cert:\CurrentUser\My" `
+        -CertStoreLocation $myStore `
         -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3") # Code Signing OID
 }
 
-# 인증서 내보내기 및 신뢰할 수 있는 사용자(Trusted People) 저장소에 등록
+# 인증서 내보내기 및 신뢰할 수 있는 사용자(Trusted People) & 루트 인증 기관(Root) 저장소에 등록
 Export-Certificate -Cert $cert -FilePath $CertPath | Out-Null
 Write-Host "인증서 내보내기 완료: $CertPath" -ForegroundColor Gray
 
-# 신뢰할 수 있는 사용자 저장소에 추가 (관리자 권한 없이 CurrentUser 범위 내에서 가능)
-$trustedStore = "Cert:\CurrentUser\TrustedPeople"
-$alreadyTrusted = Get-ChildItem $trustedStore | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
+$trustedStore = "Cert:\$StoreScope\TrustedPeople"
+$rootStore = "Cert:\$StoreScope\Root"
+
+# TrustedPeople 등록
+$alreadyTrusted = Get-ChildItem $trustedStore -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
 if (-not $alreadyTrusted) {
-    Write-Host "신뢰할 수 있는 사용자(TrustedPeople) 저장소에 인증서를 등록합니다..." -ForegroundColor Yellow
+    Write-Host "$trustedStore 저장소에 인증서를 등록합니다..." -ForegroundColor Yellow
     Import-Certificate -FilePath $CertPath -CertStoreLocation $trustedStore | Out-Null
 }
-Write-Host "인증서가 신뢰할 수 있는 목록에 등록되었습니다." -ForegroundColor Green
+
+# Root 등록 (비관리자 실행 시 윈도우 보안 경고 팝업이 뜰 수 있으며, '예'를 선택해야 등록이 정상적으로 완료됩니다)
+$alreadyRoot = Get-ChildItem $rootStore -ErrorAction SilentlyContinue | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
+if (-not $alreadyRoot) {
+    Write-Host "$rootStore 저장소에 인증서를 등록합니다..." -ForegroundColor Yellow
+    Import-Certificate -FilePath $CertPath -CertStoreLocation $rootStore | Out-Null
+}
+Write-Host "인증서가 신뢰할 수 있는 목록 및 루트 저장소에 등록되었습니다." -ForegroundColor Green
 
 # 5. MSIX 패키지 서명
 Write-Host "SignTool을 사용하여 패키지 서명 중..." -ForegroundColor Gray
-# signtool sign /fd SHA256 /sha1 <thumbprint> <package>
-& $signtool sign /fd SHA256 /sha1 $cert.Thumbprint $MsixPath | Out-Null
+$signtoolArgs = @("sign", "/fd", "SHA256", "/sha1", $cert.Thumbprint)
+if ($StoreScope -eq "LocalMachine") {
+    $signtoolArgs += "/sm"
+}
+$signtoolArgs += $MsixPath
+& $signtool $signtoolArgs | Out-Null
 Write-Host "패키지 서명 완료." -ForegroundColor Green
 
 # 6. Sparse Package 시스템 등록
@@ -169,7 +194,7 @@ if ($existingPkg) {
 }
 
 # 외부 소스(External Location)로 패키지 등록
-Add-AppxPackage -Path $MsixPath -ExternalLocationPath $AppRoot
+Add-AppxPackage -Path $MsixPath -ExternalLocation $AppRoot
 
 Write-Host "축하합니다! MZC Sparse Package 등록이 성공적으로 완료되었습니다." -ForegroundColor Green
 Write-Host "이제 Windows 11 탐색기에서 파일/폴더 우클릭 시 모던 컨텍스트 메뉴(MZC로 압축/해제)가 바로 표시됩니다." -ForegroundColor Cyan
