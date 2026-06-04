@@ -123,7 +123,7 @@ fn build_huffman_tree(lengths: &[u8]) -> Option<Vec<Node>> {
             continue; // 비트 길이가 0인 기호는 이 파일에서 사용하지 않는 기호이므로 건너뜁니다.
         }
         // 기호의 비트 값과 순서쌍을 배정받습니다.
-        let mut cur_code = next_code[len as usize];
+        let cur_code = next_code[len as usize];
         next_code[len as usize] += 1;
         
         // 배정받은 코드 비트스트림을 따라가며 트리에 가지(Branch)를 심어 나갑니다.

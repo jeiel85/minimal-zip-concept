@@ -7,7 +7,7 @@ use crate::checksum::calculate_sha256;
 use crate::rle::Dictionary;
 use crate::huffman::{huffman_decompress, huffman_decompress_dynamic};
 use crate::format::{
-    MzcHeader, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
+    MzcHeader, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
     VERSION_MZC7, FILTER_DELTA, FILTER_BCJ, FILTER_DYNAMIC_HUFFMAN, FILTER_ANS, ALGORITHM_RLE,
     ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2
 };
@@ -177,8 +177,8 @@ pub struct MzcGuiApp {
     cm_sim_ctx_byte: u16,
     cm_sim_prev1: u8,
     cm_sim_prev2: u8,
-    cm_sim_probabilities: [u32; 3], // p0, p1, p2
-    cm_sim_weights: [[i32; 3]; 8], // w0, w1, w2
+    cm_sim_probabilities: [u32; 5], // p0, p1, p2, p3, p4
+    cm_sim_weights: [[i32; 5]; 8], // w0..w4
     cm_sim_mixed_p: u32,
     cm_sim_autoplay: bool,
     cm_sim_last_step_time: std::time::Instant,
@@ -191,6 +191,16 @@ pub struct MzcGuiApp {
     download_progress: f32,
     show_update_modal: bool,
     context_menu_status: String,
+
+    // 글로잉 원형 프로그레스 링 상태
+    progress_ratio: f32,
+    throughput_current: f64,
+    total_chunks_expected: usize,
+    chunks_completed: usize,
+
+    // 토스트 알림 배너 상태
+    toast_message: String,
+    toast_start_time: Option<std::time::Instant>,
 }
 
 impl MzcGuiApp {
@@ -256,8 +266,8 @@ impl MzcGuiApp {
             cm_sim_ctx_byte: 1,
             cm_sim_prev1: 0x55,
             cm_sim_prev2: 0x33,
-            cm_sim_probabilities: [2048, 2048, 2048],
-            cm_sim_weights: [[1024, 2048, 5120]; 8],
+            cm_sim_probabilities: [2048, 2048, 2048, 2048, 2048],
+            cm_sim_weights: [[1024, 1024, 2048, 2048, 2048]; 8],
             cm_sim_mixed_p: 2048,
             cm_sim_autoplay: false,
             cm_sim_last_step_time: std::time::Instant::now(),
@@ -268,6 +278,16 @@ impl MzcGuiApp {
             download_progress: 0.0,
             show_update_modal: false,
             context_menu_status: "대기 중".to_string(),
+
+            // 글로잉 원형 프로그레스 링 초기화
+            progress_ratio: 0.0,
+            throughput_current: 0.0,
+            total_chunks_expected: 0,
+            chunks_completed: 0,
+
+            // 토스트 알림 배너 초기화
+            toast_message: String::new(),
+            toast_start_time: None,
         }
     }
 
@@ -369,8 +389,14 @@ impl MzcGuiApp {
     ) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
-            // 원본 바이트 로드
-            match std::fs::read(&path) {
+            // 원본 바이트 로드 (폴더인 경우 아카이빙 진행)
+            let read_res = if path.is_dir() {
+                crate::archive::archive_directory(&path).map_err(|e| e.to_string())
+            } else {
+                std::fs::read(&path).map_err(|e| e.to_string())
+            };
+
+            match read_res {
                 Ok(original_bytes) => {
                     let orig_size = original_bytes.len() as u64;
                     let sha256 = crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
@@ -472,7 +498,7 @@ impl MzcGuiApp {
                                 };
 
                                 // 로컬/전역 사전을 확보합니다.
-                                let (dict, rle_payload) = if header.dictionary_size > 0 {
+                                let (_dict, rle_payload) = if header.dictionary_size > 0 {
                                     let g_dict = if let Some(ref d_bytes) = dict_bytes {
                                         Dictionary::from_bytes(d_bytes).unwrap_or_default()
                                     } else {
@@ -649,9 +675,17 @@ impl MzcGuiApp {
                             let sha256 = crate::checksum::bytes_to_hex(&calculate_sha256(&restored_bytes));
 
                             let mut saved_path = path.clone();
-                            saved_path.set_extension("restored.txt");
+                            let write_res = if crate::archive::is_mzar_archive(&restored_bytes) {
+                                saved_path.set_extension("extracted");
+                                crate::archive::extract_archive(&restored_bytes, &saved_path)
+                                    .map_err(|e| e.to_string())
+                            } else {
+                                saved_path.set_extension("restored.txt");
+                                std::fs::write(&saved_path, &restored_bytes)
+                                    .map_err(|e| e.to_string())
+                            };
 
-                            match std::fs::write(&saved_path, &restored_bytes) {
+                            match write_res {
                                 Ok(_) => {
                                     let _ = tx.send(TaskResult::DecompressDone {
                                         restored_size,
@@ -660,7 +694,7 @@ impl MzcGuiApp {
                                     });
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(TaskResult::Error(format!("파일 복원 쓰기 에러: {}", e)));
+                                    let _ = tx.send(TaskResult::Error(format!("복원 쓰기 에러: {}", e)));
                                 }
                             }
                         }
@@ -834,7 +868,7 @@ impl MzcGuiApp {
                                         chunk_data.to_vec()
                                     };
 
-                                    let (dict, rle_payload) = if header.dictionary_size > 0 {
+                                    let (_dict, rle_payload) = if header.dictionary_size > 0 {
                                         let g_dict = if let Some(ref d_bytes) = dict_bytes {
                                             Dictionary::from_bytes(d_bytes).unwrap_or_default()
                                         } else {
@@ -1100,8 +1134,8 @@ impl MzcGuiApp {
         self.cm_sim_ctx_byte = 1;
         self.cm_sim_prev1 = 0x55;
         self.cm_sim_prev2 = 0x33;
-        self.cm_sim_weights = [[1024, 2048, 5120]; 8];
-        self.cm_sim_probabilities = [2048, 2048, 2048];
+        self.cm_sim_weights = [[1024, 1024, 2048, 2048, 2048]; 8];
+        self.cm_sim_probabilities = [2048, 2048, 2048, 2048, 2048];
         self.cm_sim_mixed_p = 2048;
     }
 
@@ -1126,25 +1160,36 @@ impl MzcGuiApp {
         let n2_1 = (25 - bit_idx * 2) as u32;
         let p2 = ((n2_0 + 1) * 4096) / (n2_0 + n2_1 + 2);
 
-        self.cm_sim_probabilities = [p0, p1, p2];
+        let n3_0 = (bit_idx * 3 + 2) as u32;
+        let n3_1 = (18 - bit_idx * 2) as u32;
+        let p3 = ((n3_0 + 1) * 4096) / (n3_0 + n3_1 + 2);
+
+        let n4_0 = (bit_idx * 2 + 5) as u32;
+        let n4_1 = (20 - bit_idx) as u32;
+        let p4 = ((n4_0 + 1) * 4096) / (n4_0 + n4_1 + 2);
+
+        self.cm_sim_probabilities = [p0, p1, p2, p3, p4];
 
         let w = self.cm_sim_weights[bit_idx];
-        let sum_w = (w[0] + w[1] + w[2]) as u32;
-        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2) / sum_w;
+        let sum_w = (w[0] + w[1] + w[2] + w[3] + w[4]) as u32;
+        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2 + w[3] as u32 * p3 + w[4] as u32 * p4) / sum_w;
         if p == 0 { p = 1; } else if p >= 4096 { p = 4095; }
         self.cm_sim_mixed_p = p;
 
         // LMS 오차 가중치 업데이트
         let target = if !bit { 4096i32 } else { 0i32 };
         let err = target - p as i32;
-        let learning_shift = 13; // 빠른 시각 변화용 학습률 조정
+        let err_abs = err.abs();
+        let learning_shift = if err_abs > 2500 { 11 } else if err_abs > 1200 { 12 } else { 13 }; // 시뮬용 학습속도 조율
 
         let mut next_w = w;
-        for i in 0..3 {
+        for i in 0..5 {
             let pi_val = match i {
                 0 => p0 as i32,
                 1 => p1 as i32,
                 2 => p2 as i32,
+                3 => p3 as i32,
+                4 => p4 as i32,
                 _ => unreachable!(),
             };
             let delta = (err * (pi_val - p as i32)) >> learning_shift;
@@ -1176,6 +1221,13 @@ impl eframe::App for MzcGuiApp {
                     let throughput = if duration > 0.0 { (orig_size as f64 / 1_024_000.0) / duration } else { 0.0 };
                     self.chunk_ratios[chunk_idx] = ratio;
                     self.chunk_throughputs[chunk_idx] = throughput;
+
+                    // 원형 프로그레스 링 업데이트
+                    self.chunks_completed = chunk_idx + 1;
+                    self.throughput_current = throughput;
+                    if self.total_chunks_expected > 0 {
+                        self.progress_ratio = (self.chunks_completed as f32 / self.total_chunks_expected as f32).min(0.99);
+                    }
                 }
                 TaskResult::CompressDone {
                     orig_size,
@@ -1205,6 +1257,11 @@ impl eframe::App for MzcGuiApp {
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
                     self.status = format!("압축 성공! 저장됨: {:?}", saved_path.file_name().unwrap_or(saved_path.as_os_str()));
+
+                    // 토스트 알림 트리거 및 프로그레스 링 완료
+                    self.progress_ratio = 1.0;
+                    self.toast_message = format!("✅ 압축 완료! 원본 {} bytes → {} bytes ({:.1}%)", orig_size, comp_size, ratio);
+                    self.toast_start_time = Some(std::time::Instant::now());
                 }
                 TaskResult::DecompressDone { restored_size, sha256, saved_path } => {
                     self.is_processing = false;
@@ -1212,6 +1269,11 @@ impl eframe::App for MzcGuiApp {
                     self.sha256_hash = sha256;
                     self.verified_ok = true;
                     self.status = format!("해제 완료 및 해시 검증 완료! 경로: {:?}", saved_path.file_name().unwrap_or(saved_path.as_os_str()));
+
+                    // 토스트 알림 트리거 및 프로그레스 링 완료
+                    self.progress_ratio = 1.0;
+                    self.toast_message = format!("🔓 압축 해제 완료! 복원 크기: {} bytes", restored_size);
+                    self.toast_start_time = Some(std::time::Instant::now());
                 }
                 TaskResult::InspectDone {
                     orig_size,
@@ -1415,6 +1477,13 @@ impl eframe::App for MzcGuiApp {
                             self.status = format!("선택 파일: {:?}", path.file_name().unwrap_or(path.as_os_str()));
                         }
                     }
+
+                    if ui.button("📂 압축 대상 폴더 열기...").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                            self.input_path = Some(path.clone());
+                            self.status = format!("선택 폴더: {:?} (MZAR 아카이브 압축 대상)", path.file_name().unwrap_or(path.as_os_str()));
+                        }
+                    }
                     
                     ui.add_space(8.0);
 
@@ -1424,6 +1493,21 @@ impl eframe::App for MzcGuiApp {
                             self.is_processing = true;
                             self.chunk_ratios.clear();
                             self.chunk_throughputs.clear();
+                            self.progress_ratio = 0.0;
+                            self.throughput_current = 0.0;
+                            self.chunks_completed = 0;
+                            // 청크 수 추정: 원본 파일 크기 기반 (256KB 청크 기준)
+                            if let Ok(meta) = std::fs::metadata(path) {
+                                let file_size = if meta.is_dir() {
+                                    // 폴더인 경우 대략적 추정
+                                    std::fs::read_dir(path).map(|rd| rd.count() as u64 * 50_000).unwrap_or(1_000_000)
+                                } else {
+                                    meta.len()
+                                };
+                                self.total_chunks_expected = std::cmp::max(1, (file_size / 262_144) as usize);
+                            } else {
+                                self.total_chunks_expected = 4;
+                            }
                             self.status = "백그라운드에서 압축 가동 중...".to_string();
                             self.spawn_compress_task(
                                 path.clone(),
@@ -1443,6 +1527,10 @@ impl eframe::App for MzcGuiApp {
                         let decompress_btn = ui.add_enabled(!self.is_processing, egui::Button::new("🔓 압축 해제 및 복원"));
                         if decompress_btn.clicked() {
                             self.is_processing = true;
+                            self.progress_ratio = 0.0;
+                            self.throughput_current = 0.0;
+                            self.total_chunks_expected = 1;
+                            self.chunks_completed = 0;
                             self.status = "백그라운드에서 역변환 및 체크섬 교차 검사 중...".to_string();
                             self.spawn_decompress_task(path.clone(), self.dict_path.clone());
                         }
@@ -1574,6 +1662,101 @@ impl eframe::App for MzcGuiApp {
                     });
 
                     ui.add_space(8.0);
+
+                    // ============ 글로잉 원형 프로그레스 링 (Glowing Circular Progress Ring) ============
+                    if self.is_processing || self.progress_ratio > 0.01 {
+                        ui.group(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "🔄 실시간 압축 진행 상황");
+                            ui.separator();
+
+                            let desired_size = egui::vec2(ui.available_width().min(300.0), 180.0);
+                            let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                            let painter = ui.painter();
+
+                            let center = rect.center();
+                            let radius = 65.0;
+                            let stroke_width = 10.0;
+
+                            // 배경 트랙 원
+                            painter.circle_stroke(
+                                center,
+                                radius,
+                                egui::Stroke::new(stroke_width, egui::Color32::from_rgb(35, 35, 40)),
+                            );
+
+                            // 프로그레스 아크 그리기 (세그먼트별)
+                            let progress = self.progress_ratio.clamp(0.0, 1.0);
+                            let segments = 80;
+                            let filled_segments = (progress * segments as f32) as usize;
+                            let start_angle = -std::f32::consts::FRAC_PI_2; // 12시 방향 시작
+
+                            for i in 0..filled_segments {
+                                let t0 = i as f32 / segments as f32;
+                                let t1 = (i + 1) as f32 / segments as f32;
+                                let a0 = start_angle + t0 * std::f32::consts::TAU;
+                                let a1 = start_angle + t1 * std::f32::consts::TAU;
+
+                                let p0 = center + egui::vec2(a0.cos(), a0.sin()) * radius;
+                                let p1 = center + egui::vec2(a1.cos(), a1.sin()) * radius;
+
+                                // 그라디언트 색상: 민트 → 시안
+                                let mint_r = 45.0 + (t0 * 30.0);
+                                let mint_g = 206.0 - (t0 * 40.0);
+                                let mint_b = 137.0 + (t0 * 118.0);
+                                let color = egui::Color32::from_rgb(mint_r as u8, mint_g as u8, mint_b as u8);
+
+                                painter.line_segment([p0, p1], egui::Stroke::new(stroke_width, color));
+                            }
+
+                            // 글로 효과 - 끝점 하이라이트
+                            if filled_segments > 0 {
+                                let end_angle = start_angle + progress * std::f32::consts::TAU;
+                                let glow_center = center + egui::vec2(end_angle.cos(), end_angle.sin()) * radius;
+
+                                // 외부 글로 (반투명)
+                                for glow_r in [14.0, 10.0, 6.0] {
+                                    let alpha = (40.0 / glow_r * 3.0) as u8;
+                                    painter.circle_filled(
+                                        glow_center,
+                                        glow_r,
+                                        egui::Color32::from_rgba_premultiplied(45, 206, 137, alpha),
+                                    );
+                                }
+                                // 밝은 핵심 점
+                                painter.circle_filled(
+                                    glow_center,
+                                    4.0,
+                                    egui::Color32::from_rgb(200, 255, 230),
+                                );
+                            }
+
+                            // 중심 텍스트: 퍼센트
+                            let pct_text = format!("{:.1}%", progress * 100.0);
+                            painter.text(
+                                center + egui::vec2(0.0, -8.0),
+                                egui::Align2::CENTER_CENTER,
+                                pct_text,
+                                egui::FontId::proportional(28.0),
+                                egui::Color32::WHITE,
+                            );
+
+                            // 하단 텍스트: 처리속도
+                            let speed_text = if self.throughput_current > 0.0 {
+                                format!("{:.2} MB/s", self.throughput_current)
+                            } else {
+                                "처리 중...".to_string()
+                            };
+                            painter.text(
+                                center + egui::vec2(0.0, 16.0),
+                                egui::Align2::CENTER_CENTER,
+                                speed_text,
+                                egui::FontId::proportional(13.0),
+                                egui::Color32::from_rgb(160, 160, 170),
+                            );
+                        });
+
+                        ui.add_space(8.0);
+                    }
 
                     // 명세 테이블
                     ui.columns(2, |columns| {
@@ -2001,13 +2184,15 @@ impl eframe::App for MzcGuiApp {
                             ui.colored_label(egui::Color32::from_rgb(150, 150, 150), format!("0차 문맥 확률 (p0): {}", self.cm_sim_probabilities[0]));
                             ui.colored_label(egui::Color32::from_rgb(255, 196, 0), format!("1차 문맥 확률 (p1): {}", self.cm_sim_probabilities[1]));
                             ui.colored_label(egui::Color32::from_rgb(41, 121, 255), format!("2차 문맥 확률 (p2): {}", self.cm_sim_probabilities[2]));
+                            ui.colored_label(egui::Color32::from_rgb(200, 80, 200), format!("3차 문맥 확률 (p3): {}", self.cm_sim_probabilities[3]));
+                            ui.colored_label(egui::Color32::from_rgb(255, 140, 60), format!("비트 문맥 확률 (p4): {}", self.cm_sim_probabilities[4]));
                             
                             ui.add_space(5.0);
                             ui.colored_label(egui::Color32::from_rgb(45, 206, 137), format!("최종 혼합 확률 (p): {}", self.cm_sim_mixed_p));
                         });
 
                         cols[1].group(|ui| {
-                            ui.label("🧠 LMS 적응형 가중치 상태");
+                            ui.label("🧠 LMS 적응형 가중치 상태 (5-Context Mixing)");
                             ui.separator();
                             let w_idx = std::cmp::min(self.cm_sim_bit_idx, 7);
                             let w = self.cm_sim_weights[w_idx];
@@ -2017,6 +2202,10 @@ impl eframe::App for MzcGuiApp {
                             ui.add(egui::ProgressBar::new(w[1] as f32 / 16384.0).fill(egui::Color32::from_rgb(255, 196, 0)));
                             ui.label(format!("2차 문맥 가중치 (w2): {}", w[2]));
                             ui.add(egui::ProgressBar::new(w[2] as f32 / 16384.0).fill(egui::Color32::from_rgb(41, 121, 255)));
+                            ui.label(format!("3차 문맥 가중치 (w3): {}", w[3]));
+                            ui.add(egui::ProgressBar::new(w[3] as f32 / 16384.0).fill(egui::Color32::from_rgb(200, 80, 200)));
+                            ui.label(format!("비트 문맥 가중치 (w4): {}", w[4]));
+                            ui.add(egui::ProgressBar::new(w[4] as f32 / 16384.0).fill(egui::Color32::from_rgb(255, 140, 60)));
                         });
                     });
 
@@ -2112,6 +2301,77 @@ impl eframe::App for MzcGuiApp {
                 if !show || close_clicked {
                     self.show_update_modal = false;
                 }
+            }
+        }
+
+        // ============ 토스트 알림 배너 오버레이 (Slide-in / Fade-out) ============
+        if let Some(start_time) = self.toast_start_time {
+            let elapsed = start_time.elapsed().as_secs_f32();
+            let total_duration = 4.0; // 총 표시 시간 (초)
+            let slide_in_duration = 0.3; // 슬라이드-인 시간
+            let fade_out_start = 2.5; // 페이드아웃 시작 시점
+
+            if elapsed < total_duration {
+                let screen_rect = ctx.screen_rect();
+                let toast_width = 420.0_f32.min(screen_rect.width() - 40.0);
+                let toast_height = 48.0;
+
+                // 슬라이드-인 애니메이션 (ease-out)
+                let slide_t = (elapsed / slide_in_duration).min(1.0);
+                let ease_t = 1.0 - (1.0 - slide_t).powi(3); // ease-out cubic
+                let target_y = screen_rect.top() + 20.0;
+                let start_y = screen_rect.top() - toast_height - 10.0;
+                let current_y = start_y + (target_y - start_y) * ease_t;
+
+                // 페이드아웃 알파
+                let alpha = if elapsed > fade_out_start {
+                    let fade_t = (elapsed - fade_out_start) / (total_duration - fade_out_start);
+                    ((1.0 - fade_t) * 230.0) as u8
+                } else {
+                    230
+                };
+
+                let toast_x = screen_rect.center().x - toast_width / 2.0;
+                let toast_rect = egui::Rect::from_min_size(
+                    egui::pos2(toast_x, current_y),
+                    egui::vec2(toast_width, toast_height),
+                );
+
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("toast_overlay"),
+                ));
+
+                // 배경 (글라스모피즘 다크)
+                painter.rect_filled(
+                    toast_rect,
+                    12.0,
+                    egui::Color32::from_rgba_premultiplied(25, 30, 28, alpha),
+                );
+
+                // 좌측 액센트 바
+                let accent_rect = egui::Rect::from_min_size(
+                    toast_rect.left_top(),
+                    egui::vec2(4.0, toast_height),
+                );
+                painter.rect_filled(
+                    accent_rect,
+                    egui::Rounding { nw: 12.0, sw: 12.0, ne: 0.0, se: 0.0 },
+                    egui::Color32::from_rgba_premultiplied(45, 206, 137, alpha),
+                );
+
+                // 텍스트
+                painter.text(
+                    toast_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &self.toast_message,
+                    egui::FontId::proportional(15.0),
+                    egui::Color32::from_rgba_premultiplied(240, 240, 240, alpha),
+                );
+            } else {
+                // 애니메이션 종료 후 토스트 상태 정리
+                self.toast_start_time = None;
+                self.toast_message.clear();
             }
         }
 

@@ -1,18 +1,42 @@
-// [Rust 모듈 시스템 설명]
-// - pub mod: 외부 파일(예: cli.rs, error.rs 등)을 현재 라이브러리의 하위 모듈로 등록하고 공개(pub)합니다.
-// - 이를 통해 컴파일러는 이 하위 모듈 파일들을 함께 묶어서 컴파일합니다.
+//! # MZC (Minimal Zip Concept)
+//!
+//! 고급 무손실 압축기 및 아카이버 라이브러리입니다.
+//! LZ77, RLE, tANS, Context Mixing, SIMD 가속, MZAR 디렉토리 아카이빙을 지원합니다.
+//!
+//! ## 핵심 공개 API
+//! - [`compress_bytes_v2`] / [`decompress_bytes_v2`]: 단일 파일 압축/해제
+//! - [`compress_bytes_v2_dict`] / [`decompress_bytes_v2_dict`]: 외부 사전 기반 압축/해제
+//! - [`compress_stream`] / [`decompress_stream`]: 스트리밍 압축/해제
+//! - [`archive`]: MZAR 디렉토리 컨테이너 직렬화/역직렬화
+
+// ─── 공개 모듈: CLI 및 사용자 인터페이스 ───
 pub mod cli;
+pub mod gui;
+
+// ─── 공개 모듈: 핵심 데이터 구조 ───
 pub mod error;
 pub mod format;
 pub mod rle;
 pub mod checksum;
-pub mod inspect;
+
+// ─── 내부 구현 모듈 (외부 API 문서에서 숨김 처리) ───
+// 아래 모듈들은 라이브러리 내부 구현 세부사항이며, 안정적 공개 API가 아닙니다.
+// 향후 pub(crate)로 전환 예정이므로 외부 의존을 피해 주세요.
+#[doc(hidden)]
 pub mod huffman;
+#[doc(hidden)]
 pub mod ans;
+#[doc(hidden)]
 pub mod cm;
+#[doc(hidden)]
 pub mod filters;
+#[doc(hidden)]
 pub mod deflate;
-pub mod gui;
+#[doc(hidden)]
+pub mod inspect;
+
+// ─── 공개 모듈: 아카이브 컨테이너 ───
+pub mod archive;
 
 // [Rust 경로 수입 설명]
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
@@ -681,7 +705,6 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
     lpc: bool,
     dict_data: Option<&[u8]>,
 ) -> Result<(), MzcError> {
-    use std::io::Write;
     use sha2::{Sha256, Digest};
     let is_v7 = entropy == EntropyMode::Cm || png || lpc;
     // 1. 임시 헤더 영역 (56바이트) 예약 생성
@@ -881,7 +904,6 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
     writer: &mut W,
     dict_data: Option<&[u8]>,
 ) -> Result<(), MzcError> {
-    use std::io::Read;
     use sha2::Digest;
 
     // 1. 헤더 영역 읽기

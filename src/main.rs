@@ -35,11 +35,6 @@ fn main() -> Result<()> {
             lpc, 
             dict_file 
         } => {
-            // 폴더 압축 검증
-            if input_file.is_dir() {
-                anyhow::bail!("폴더 압축은 지원하지 않습니다. 단일 파일로 먼저 패킹하거나 단일 파일을 선택해 주세요.");
-            }
-
             // 출력 파일 경로 자동 추론
             let out_file = match output_file {
                 Some(path) => path,
@@ -64,9 +59,15 @@ fn main() -> Result<()> {
             }
             
             // 원본 파일의 원시 바이트를 로드합니다.
-            // `.with_context`는 에러 발생 시 부가 정보를 덧붙여 에러를 추적하기 쉽게 만들어 줍니다.
-            let original_bytes = fs::read(&input_file)
-                .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_file))?;
+            // 폴더인 경우 MZAR 아카이브 컨테이너로 먼저 패킹(직렬화)을 수행합니다.
+            let original_bytes = if input_file.is_dir() {
+                println!("대상 경로가 디렉토리입니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
+                mzc::archive::archive_directory(&input_file)
+                    .with_context(|| format!("디렉토리 '{:?}' 아카이빙 실패", input_file))?
+            } else {
+                fs::read(&input_file)
+                    .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_file))?
+            };
             
             let original_size = original_bytes.len() as u64;
 
@@ -152,9 +153,16 @@ fn main() -> Result<()> {
             let decompressed_bytes = mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
                 .context("MZIP 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
 
-            // 복원된 파일 디스크 저장
-            fs::write(&out_file, &decompressed_bytes)
-                .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
+            // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
+            if mzc::archive::is_mzar_archive(&decompressed_bytes) {
+                println!("복원된 바이트에서 MZAR 컨테이너 헤더가 감지되었습니다. 폴더 구조 추출을 시작합니다.");
+                mzc::archive::extract_archive(&decompressed_bytes, &out_file)
+                    .with_context(|| format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file))?;
+                println!("디렉토리 아카이브 복원 성공!");
+            } else {
+                fs::write(&out_file, &decompressed_bytes)
+                    .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
+            }
 
             let restored_hash_hex = bytes_to_hex(&calculate_sha256(&decompressed_bytes));
 
