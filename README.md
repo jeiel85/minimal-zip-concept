@@ -3,7 +3,21 @@
 MZC는 Rust 학습과 압축 알고리즘 작동 원리의 이해를 병행하기 위해 직접 설계한 무손실 압축 포맷 및 CLI/GUI 도구입니다.
 상용 압축 알고리즘(ZIP, Zstandard, Brotli 등)을 능가하는 것이 목표가 아니라, 바이트 정합성과 무손실 복원의 원리를 명확하게 구현하고 점진적인 포맷 고도화 단계를 실습하는 데 초점을 맞추었습니다.
 
-👉 **[MZC GitHub Pages 랜딩 페이지 바로가기](https://jeiel85.github.io/minimal-zip-concept/)**
+<div align="center">
+
+[![Try it in your browser](https://img.shields.io/badge/Try%20it%20in%20your%20browser-WASM%20Demo-brightgreen?style=for-the-badge&logo=webassembly&logoColor=white)](https://jeiel85.github.io/minimal-zip-concept/)
+[![Crates.io](https://img.shields.io/crates/v/mzc.svg?style=for-the-badge&color=orange)](https://crates.io/crates/mzc)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge)](https://github.com/jeiel85/minimal-zip-concept)
+
+<br/>
+
+### 🚀 **[Try MZC Interactive LZ77 Visualizer & WASM Demo! (웹 브라우저에서 바로 해보기)](https://jeiel85.github.io/minimal-zip-concept/)**
+
+![MZC Interactive LZ77 sliding window visualizer](assets/mzc_lz77_visualizer.png)
+
+*MZC Web Demo - Interactive LZ77 Sliding Window Visualizer*
+
+</div>
 
 ---
 
