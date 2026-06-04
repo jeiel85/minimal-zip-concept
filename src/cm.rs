@@ -16,18 +16,11 @@ const C2_SIZE: usize = 262144;
 ///   * Vec은 동적으로 크기가 변하는 가변 배열(Vector)입니다.
 ///   * (u8, u8)은 튜플(Tuple) 구조로, 2개의 8비트 부호 없는 정수(0~255 범위)를 한 쌍으로 묶은 것입니다.
 ///   * 각 튜플은 (현재 문맥에서 0이 나타난 횟수, 1이 나타난 횟수)를 누적 기록합니다.
-struct CmModel {
-    // Context 0: 현재 바이트 내부에서 지금까지 몇 번째 비트였는지를 기준으로 카운팅 (크기: 256)
-    // 현재 처리 중인 비트 위치(0~7번째) 및 트리 경로 상태에 따라 문맥을 분리합니다.
-    c0_table: Vec<(u8, u8)>,
-
-    // Context 1: 직전 1바이트(8비트) 값과 현재 비트 위치(트리 경로)를 결합한 문맥 (크기: 65,536)
-    // `(직전_바이트 << 8) | 현재_비트_위치` 형태로 결합하여 고유 인덱스를 만듭니다.
-    c1_table: Vec<(u8, u8)>,
-
-    // Context 2: 직전 2바이트 값들과 현재 비트 위치를 결합한 문맥 (크기: C2_SIZE)
-    // 테이블 크기가 너무 커서 메모리를 과도하게 쓰지 않도록 해시 함수를 통해 인덱스를 256KB 범위로 압축 매핑합니다.
-    c2_table: Vec<(u8, u8)>,
+pub struct CmModel {
+    pub c0_table: Vec<(u8, u8)>,
+    pub c1_table: Vec<(u8, u8)>,
+    pub c2_table: Vec<(u8, u8)>,
+    pub weights: [[i32; 3]; 8],
 }
 
 // [Rust 기초 설명]
@@ -38,11 +31,12 @@ impl CmModel {
     /// [Rust 기초 설명]
     /// - Self: impl을 정의하고 있는 현재 구조체 타입(여기서는 CmModel)을 가리키는 지시어입니다.
     /// - vec![(0, 0); 크기]: 모든 요소를 (0, 0)으로 채운 지정된 크기의 벡터를 생성하는 매크로(식)입니다.
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             c0_table: vec![(0, 0); 256],
             c1_table: vec![(0, 0); 65536],
             c2_table: vec![(0, 0); C2_SIZE],
+            weights: [[1024, 2048, 5120]; 8],
         }
     }
 
@@ -53,7 +47,7 @@ impl CmModel {
     /// - u16, u8: 각각 16비트, 8비트 크기의 부호 없는 정수입니다.
     /// - u32: 32비트 크기의 부호 없는 정수입니다.
     /// - as usize / as u32: Rust의 엄격한 타입 체크 때문에, 서로 다른 크기의 정수나 인덱스를 연산하려면 명시적으로 형변환(Casting)을 해야 합니다.
-    fn get_probability(&self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8) -> u32 {
+    pub fn get_probability(&self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8, bit_idx: usize) -> u32 {
         // --- 1. Context 0 (0차 예측) ---
         // 현재 바이트 내에서 디코딩된 비트 경로(ctx_byte)를 인덱스로 삼아 0과 1의 빈도수를 가져옵니다.
         let idx0 = ctx_byte as usize;
@@ -79,10 +73,11 @@ impl CmModel {
         let (n2_0, n2_1) = self.c2_table[hash_val];
         let p2 = ((n2_0 as u32 + 1) * 4096) / (n2_0 as u32 + n2_1 as u32 + 2);
 
-        // --- 4. 확률 혼합 (Probability Mixing) ---
-        // 고차(더 구체적인 문맥) 정보일수록 예측 신뢰도가 높으므로 p2에 가중치 5, p1에 2, p0에 1을 곱합니다.
-        // 총 가중치 합이 8이므로 나누기 8(>> 3)을 수행하여 최종 정수 혼합 확률 `p`를 계산합니다.
-        let mut p = (p0 + 2 * p1 + 5 * p2) / 8;
+        // --- 4. 확률 혼합 (LMS Adaptive Mixing) ---
+        // 고정 가중치 대신 현재 비트 위치(bit_idx)에 따른 적응형 가중치를 사용합니다.
+        let w = self.weights[bit_idx];
+        let sum_w = (w[0] + w[1] + w[2]) as u32;
+        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2) / sum_w;
 
         // 경계값 예외 처리: 확률이 완전히 0이거나 4096이 되면 레인지 분할 구간이 사라져 수학적 오류가 납니다.
         // 따라서 최솟값 1, 최댓값 4095로 제한(Clamping)합니다.
@@ -99,7 +94,47 @@ impl CmModel {
     /// [알고리즘 및 Rust 문법 설명]
     /// - &mut self: 구조체 내부 변수를 직접 수정할 수 있는 "가변 참조(Mutable Reference)"입니다.
     /// - 적응형 학습(Adaptive Learning): 데이터 스트림을 순차적으로 읽으면서 예측 가중치가 실시간으로 조율됩니다.
-    fn update(&mut self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8, bit: bool) {
+    pub fn update(&mut self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8, bit_idx: usize, bit: bool) {
+        // --- 1. 가중치 학습을 위해 개별 확률을 우선 구합니다 ---
+        let idx0 = ctx_byte as usize;
+        let (n0_0, n0_1) = self.c0_table[idx0];
+        let p0 = ((n0_0 as u32 + 1) * 4096) / (n0_0 as u32 + n0_1 as u32 + 2);
+
+        let idx1 = ((prev_byte_1 as usize) << 8) | (ctx_byte as usize);
+        let (n1_0, n1_1) = self.c1_table[idx1];
+        let p1 = ((n1_0 as u32 + 1) * 4096) / (n1_0 as u32 + n1_1 as u32 + 2);
+
+        let hash_val = (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C2_SIZE;
+        let (n2_0, n2_1) = self.c2_table[hash_val];
+        let p2 = ((n2_0 as u32 + 1) * 4096) / (n2_0 as u32 + n2_1 as u32 + 2);
+
+        let w = self.weights[bit_idx];
+        let sum_w = (w[0] + w[1] + w[2]) as u32;
+        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2) / sum_w;
+        if p == 0 {
+            p = 1;
+        } else if p >= 4096 {
+            p = 4095;
+        }
+
+        // --- 2. 오차 계산 및 LMS 적응형 가중치 조정 ---
+        // 비트가 0(false)이면 타겟 확률은 4096, 1(true)이면 타겟 확률은 0입니다.
+        let target = if !bit { 4096i32 } else { 0i32 };
+        let err = target - p as i32;
+        
+        let learning_shift = 15;
+        for i in 0..3 {
+            let pi_val = match i {
+                0 => p0 as i32,
+                1 => p1 as i32,
+                2 => p2 as i32,
+                _ => unreachable!(),
+            };
+            // 델타 업데이트 계산 및 가중치 업데이트
+            let delta = (err * (pi_val - p as i32)) >> learning_shift;
+            self.weights[bit_idx][i] = (self.weights[bit_idx][i] + delta).clamp(128, 16384);
+        }
+
         // [Rust 문법 - 클로저(Closure, 익명 함수)]
         // - `|c: &mut (u8, u8), bit_val: bool| { ... }` 형태로 정의된 한 줄짜리 헬퍼 클로저입니다.
         // - 인자로 넘겨진 테이블 항목 `c`의 내부 값을 직접 갱신합니다.
@@ -127,15 +162,12 @@ impl CmModel {
         };
 
         // 0차 문맥 업데이트
-        let idx0 = ctx_byte as usize;
         update_entry(&mut self.c0_table[idx0], bit);
 
         // 1차 문맥 업데이트
-        let idx1 = ((prev_byte_1 as usize) << 8) | (ctx_byte as usize);
         update_entry(&mut self.c1_table[idx1], bit);
 
         // 2차 문맥 업데이트
-        let hash_val = (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C2_SIZE;
         update_entry(&mut self.c2_table[hash_val], bit);
     }
 }
@@ -341,15 +373,16 @@ pub fn cm_compress(data: &[u8]) -> Result<Vec<u8>, MzcError> {
         for i in (0..8).rev() {
             // 해당 바이트의 최상위 비트(7번)부터 최하위 비트(0번)까지 순차적으로 끄집어냅니다.
             let bit = ((byte >> i) & 1) != 0;
+            let bit_idx = (7 - i) as usize;
             
             // 1. 모델로부터 현재 문맥 상태에 기초한 다음 비트의 0일 예측 확률(p)을 쿼리합니다.
-            let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2);
+            let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, bit_idx);
             
             // 2. 알아낸 비트값과 예측된 확률 분포를 산술 레인지 인코더에 공급하여 공간 압축을 진행합니다.
             encoder.encode_bit(bit, p);
             
             // 3. 방금 인코딩된 실제 비트값을 사용하여 예측 통계값 모델을 실시간 학습 갱신(update)시킵니다.
-            model.update(ctx_byte, prev_byte_1, prev_byte_2, bit);
+            model.update(ctx_byte, prev_byte_1, prev_byte_2, bit_idx, bit);
             
             // 4. `ctx_byte`에 현재 비트를 비트 쉬프트로 밀어넣어 다음 비트 예측을 위한 트리 상태를 완성합니다.
             ctx_byte = (ctx_byte << 1) | (bit as u16);
@@ -386,9 +419,11 @@ pub fn cm_decompress(cm_bytes: &[u8], original_size: usize) -> Result<Vec<u8>, M
     for _ in 0..original_size {
         let mut byte = 0u8;
         let mut ctx_byte = 1u16;
-        for _ in 0..8 {
+        for i in 0..8 {
+            let bit_idx = i;
+            
             // 1. 압축 시와 동일하게 0~2차 정보 문맥을 조회하여 비트 확률(p)을 산출합니다.
-            let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2);
+            let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, bit_idx);
             
             // 2. 레인지 디코더의 실수 분할 지점을 대조하여 실제 부호화되었던 원본 비트(bool)를 판정 복원합니다.
             let bit = decoder.decode_bit(p);
@@ -397,7 +432,7 @@ pub fn cm_decompress(cm_bytes: &[u8], original_size: usize) -> Result<Vec<u8>, M
             byte = (byte << 1) | (bit as u8);
             
             // 4. 복조 완료된 비트를 활용하여 인코더측 통계 모델과 어긋남이 없도록 학습 통계 테이블을 동일하게 동기식 업데이트합니다.
-            model.update(ctx_byte, prev_byte_1, prev_byte_2, bit);
+            model.update(ctx_byte, prev_byte_1, prev_byte_2, bit_idx, bit);
             ctx_byte = (ctx_byte << 1) | (bit as u16);
         }
         // 완성된 1바이트를 복원 스트림 버퍼에 추가합니다.

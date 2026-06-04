@@ -41,12 +41,18 @@ pub enum MzcError {
 
     /// LZ77 디코딩 시 유효 범위를 벗어나는 백레퍼런스 참조를 감지했을 때 발생합니다.
     InvalidBackRef { distance: u16, length: u16, current_size: usize },
+
+    /// I/O 시스템에서 발생하는 입출력 에러입니다.
+    IoError(String),
 }
 
 // Rust에서 사용자 정의 에러를 표준 출력용 포맷으로 만들기 위해 Display 트레이트(Trait)를 구현합니다.
 impl fmt::Display for MzcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            MzcError::IoError(msg) => {
+                write!(f, "I/O 입출력 오류: {msg}")
+            }
             MzcError::TruncatedHeader { read_bytes } => {
                 write!(f, "파일 헤더가 손상되었습니다. 필요한 헤더 바이트가 부족하며, {read_bytes}바이트만 읽었습니다.")
             }

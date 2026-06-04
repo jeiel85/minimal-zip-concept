@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints};
+use egui_plot::{Line, Plot, PlotPoints, BarChart, Bar};
 use crate::cli::{CompressionMode, EntropyMode};
 use crate::checksum::calculate_sha256;
 use crate::rle::Dictionary;
@@ -84,6 +84,14 @@ enum TaskResult {
         entry_count: usize,
         saved_path: PathBuf,
     },
+    BenchmarkDone {
+        mzc_size: u64,
+        gzip_size: u64,
+        zstd_size: u64,
+        mzc_time: f64,
+        gzip_time: f64,
+        zstd_time: f64,
+    },
     Error(String),
 }
 
@@ -130,7 +138,7 @@ pub struct MzcGuiApp {
     chunk_ratios: Vec<f64>,
     chunk_throughputs: Vec<f64>,
 
-    // 중앙 판넬의 현재 탭 위치 (0: Dashboard, 1: Dict Trainer, 2: tANS Simulation)
+    // 중앙 판넬의 현재 탭 위치 (0: Dashboard, 1: Dict Trainer, 2: tANS Simulation, 3: Benchmark, 4: CM Visualizer)
     active_tab: usize,
 
     // 사전 학습 탭(Train Tab) 전용 상태
@@ -141,6 +149,29 @@ pub struct MzcGuiApp {
     // tANS 시뮬레이터 탭 전용 플롯 데이터
     tans_sim_states: Vec<[f64; 2]>,
     tans_sim_bits: Vec<[f64; 2]>,
+
+    // Benchmark 탭 전용 상태
+    benchmark_file_path: Option<PathBuf>,
+    benchmark_mzc_size: u64,
+    benchmark_gzip_size: u64,
+    benchmark_zstd_size: u64,
+    benchmark_mzc_time: f64,
+    benchmark_gzip_time: f64,
+    benchmark_zstd_time: f64,
+    benchmark_status: String,
+
+    // CM 비트 확률 시뮬레이션 탭 전용 상태
+    cm_sim_bit_idx: usize,
+    cm_sim_byte_val: u8,
+    cm_sim_bits: [bool; 8],
+    cm_sim_ctx_byte: u16,
+    cm_sim_prev1: u8,
+    cm_sim_prev2: u8,
+    cm_sim_probabilities: [u32; 3], // p0, p1, p2
+    cm_sim_weights: [[i32; 3]; 8], // w0, w1, w2
+    cm_sim_mixed_p: u32,
+    cm_sim_autoplay: bool,
+    cm_sim_last_step_time: std::time::Instant,
 }
 
 impl MzcGuiApp {
@@ -192,6 +223,25 @@ impl MzcGuiApp {
             train_status: "학습 대상 파일을 추가하고 시작해 주세요.".to_string(),
             tans_sim_states: Vec::new(),
             tans_sim_bits: Vec::new(),
+            benchmark_file_path: None,
+            benchmark_mzc_size: 0,
+            benchmark_gzip_size: 0,
+            benchmark_zstd_size: 0,
+            benchmark_mzc_time: 0.0,
+            benchmark_gzip_time: 0.0,
+            benchmark_zstd_time: 0.0,
+            benchmark_status: "벤치마크할 파일을 선택해 주세요.".to_string(),
+            cm_sim_bit_idx: 0,
+            cm_sim_byte_val: 0xAB,
+            cm_sim_bits: [true, false, true, false, true, false, true, true],
+            cm_sim_ctx_byte: 1,
+            cm_sim_prev1: 0x55,
+            cm_sim_prev2: 0x33,
+            cm_sim_probabilities: [2048, 2048, 2048],
+            cm_sim_weights: [[1024, 2048, 5120]; 8],
+            cm_sim_mixed_p: 2048,
+            cm_sim_autoplay: false,
+            cm_sim_last_step_time: std::time::Instant::now(),
         }
     }
 
@@ -881,6 +931,138 @@ impl MzcGuiApp {
             }
         }
     }
+
+    /// **비동기 벤치마크 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
+    fn spawn_benchmark_task(&self, file_path: PathBuf) {
+        let sender = self.task_sender.clone();
+        std::thread::spawn(move || {
+            let data = match std::fs::read(&file_path) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    let _ = sender.send(TaskResult::Error(format!("파일 로드 실패: {}", e)));
+                    return;
+                }
+            };
+            if data.is_empty() {
+                let _ = sender.send(TaskResult::Error("빈 파일은 벤치마크할 수 없습니다.".to_string()));
+                return;
+            }
+
+            // 1. MZC 압축 실행 (Lz77 + CM 모드)
+            let mzc_start = std::time::Instant::now();
+            let mzc_comp = crate::compress_bytes_v2_dict(
+                &data,
+                CompressionMode::Lz77,
+                EntropyMode::Cm,
+                6,
+                false,
+                false,
+                false,
+                false,
+                None,
+            );
+            let mzc_time = mzc_start.elapsed().as_secs_f64();
+            let mzc_size = mzc_comp.len() as u64;
+
+            // 2. Gzip 압축 실행
+            let gzip_start = std::time::Instant::now();
+            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            use std::io::Write;
+            let mut gzip_size = 0;
+            let mut gzip_time = 0.0;
+            if encoder.write_all(&data).is_ok() {
+                if let Ok(comp) = encoder.finish() {
+                    gzip_time = gzip_start.elapsed().as_secs_f64();
+                    gzip_size = comp.len() as u64;
+                }
+            }
+
+            // 3. Zstd 압축 실행
+            let zstd_start = std::time::Instant::now();
+            let mut zstd_size = 0;
+            let mut zstd_time = 0.0;
+            if let Ok(comp) = zstd::bulk::compress(&data, 3) {
+                zstd_time = zstd_start.elapsed().as_secs_f64();
+                zstd_size = comp.len() as u64;
+            }
+
+            let _ = sender.send(TaskResult::BenchmarkDone {
+                mzc_size,
+                gzip_size,
+                zstd_size,
+                mzc_time,
+                gzip_time,
+                zstd_time,
+            });
+        });
+    }
+
+    /// **CM 확률 맵 시뮬레이션 상태 초기화**
+    fn init_cm_simulation(&mut self) {
+        self.cm_sim_bit_idx = 0;
+        self.cm_sim_byte_val = 0xAB; // 이진수 10101011
+        self.cm_sim_bits = [true, false, true, false, true, false, true, true];
+        self.cm_sim_ctx_byte = 1;
+        self.cm_sim_prev1 = 0x55;
+        self.cm_sim_prev2 = 0x33;
+        self.cm_sim_weights = [[1024, 2048, 5120]; 8];
+        self.cm_sim_probabilities = [2048, 2048, 2048];
+        self.cm_sim_mixed_p = 2048;
+    }
+
+    /// **CM 확률 맵 시뮬레이션 1비트 진행**
+    fn step_cm_simulation(&mut self) {
+        if self.cm_sim_bit_idx >= 8 {
+            return;
+        }
+        let bit_idx = self.cm_sim_bit_idx;
+        let bit = self.cm_sim_bits[bit_idx];
+
+        // Laplace 예측 카운트 모사 (시각화용 값 설정)
+        let n0_0 = (2 + bit_idx) as u32;
+        let n0_1 = (4 + (7 - bit_idx)) as u32;
+        let p0 = ((n0_0 + 1) * 4096) / (n0_0 + n0_1 + 2);
+
+        let n1_0 = (10 - bit_idx) as u32;
+        let n1_1 = (5 + bit_idx) as u32;
+        let p1 = ((n1_0 + 1) * 4096) / (n1_0 + n1_1 + 2);
+
+        let n2_0 = (15 + bit_idx * 2) as u32;
+        let n2_1 = (25 - bit_idx * 2) as u32;
+        let p2 = ((n2_0 + 1) * 4096) / (n2_0 + n2_1 + 2);
+
+        self.cm_sim_probabilities = [p0, p1, p2];
+
+        let w = self.cm_sim_weights[bit_idx];
+        let sum_w = (w[0] + w[1] + w[2]) as u32;
+        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2) / sum_w;
+        if p == 0 { p = 1; } else if p >= 4096 { p = 4095; }
+        self.cm_sim_mixed_p = p;
+
+        // LMS 오차 가중치 업데이트
+        let target = if !bit { 4096i32 } else { 0i32 };
+        let err = target - p as i32;
+        let learning_shift = 13; // 빠른 시각 변화용 학습률 조정
+
+        let mut next_w = w;
+        for i in 0..3 {
+            let pi_val = match i {
+                0 => p0 as i32,
+                1 => p1 as i32,
+                2 => p2 as i32,
+                _ => unreachable!(),
+            };
+            let delta = (err * (pi_val - p as i32)) >> learning_shift;
+            next_w[i] = (w[i] + delta).clamp(128, 16384);
+        }
+
+        if bit_idx + 1 < 8 {
+            self.cm_sim_weights[bit_idx + 1] = next_w;
+        }
+
+        self.cm_sim_ctx_byte = (self.cm_sim_ctx_byte << 1) | (bit as u16);
+        self.cm_sim_bit_idx += 1;
+    }
 }
 
 impl eframe::App for MzcGuiApp {
@@ -972,10 +1154,28 @@ impl eframe::App for MzcGuiApp {
                         dict_size, entry_count, saved_path
                     );
                 }
+                TaskResult::BenchmarkDone {
+                    mzc_size,
+                    gzip_size,
+                    zstd_size,
+                    mzc_time,
+                    gzip_time,
+                    zstd_time,
+                } => {
+                    self.is_processing = false;
+                    self.benchmark_mzc_size = mzc_size;
+                    self.benchmark_gzip_size = gzip_size;
+                    self.benchmark_zstd_size = zstd_size;
+                    self.benchmark_mzc_time = mzc_time;
+                    self.benchmark_gzip_time = gzip_time;
+                    self.benchmark_zstd_time = zstd_time;
+                    self.benchmark_status = "벤치마크 테스트 완료!".to_string();
+                }
                 TaskResult::Error(e) => {
                     self.is_processing = false;
                     self.status = format!("오류 발생: {}", e);
                     self.train_status = format!("오류 발생: {}", e);
+                    self.benchmark_status = format!("오류 발생: {}", e);
                 }
             }
         }
@@ -1156,6 +1356,8 @@ impl eframe::App for MzcGuiApp {
                 ui.selectable_value(&mut self.active_tab, 0, "📊 Dashboard (압축 진단 및 실시간 맵)");
                 ui.selectable_value(&mut self.active_tab, 1, "🛠 Dictionary Trainer (사전 학습 위저드)");
                 ui.selectable_value(&mut self.active_tab, 2, "📈 tANS Plot Simulator (상태 시뮬레이터)");
+                ui.selectable_value(&mut self.active_tab, 3, "⚔ Benchmark (실시간 비교 벤치마크)");
+                ui.selectable_value(&mut self.active_tab, 4, "🔬 CM Visualizer (확률 노드 시각화)");
             });
             ui.separator();
 
@@ -1437,6 +1639,249 @@ impl eframe::App for MzcGuiApp {
                                 });
                         });
                     }
+                }
+                // ================== Tab 3: Benchmark ==================
+                3 => {
+                    ui.heading("⚔ Real-Time Multi-Format Benchmark");
+                    ui.label("동일한 대상 파일에 대해 MZC (Lz77 + CM), Gzip (flate2), Zstd (zstd) 압축률과 소요 시간을 실시간으로 벤치마킹합니다.");
+                    ui.add_space(10.0);
+
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("📂 대상 파일:");
+                            if let Some(ref path) = self.benchmark_file_path {
+                                ui.colored_label(egui::Color32::from_rgb(45, 206, 137), path.to_string_lossy());
+                            } else {
+                                ui.colored_label(egui::Color32::from_rgb(120, 120, 120), "선택하지 않음");
+                            }
+                            if ui.button("선택...").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                    self.benchmark_file_path = Some(path);
+                                    self.benchmark_status = "파일 선택됨. 아래 버튼을 눌러 실행하세요.".to_string();
+                                }
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        let btn = ui.add_enabled(!self.is_processing && self.benchmark_file_path.is_some(), egui::Button::new("⚡ 비교 벤치마크 가동"));
+                        if btn.clicked() {
+                            if let Some(ref path) = self.benchmark_file_path {
+                                self.is_processing = true;
+                                self.benchmark_status = "비교 압축 벤치마킹 구동 중...".to_string();
+                                self.spawn_benchmark_task(path.clone());
+                            }
+                        }
+                        if self.is_processing {
+                            ui.spinner();
+                        }
+                        ui.label(&self.benchmark_status);
+                    });
+
+                    ui.add_space(15.0);
+
+                    if self.benchmark_mzc_size > 0 {
+                        // Display table
+                        ui.group(|ui| {
+                            ui.label("📊 포맷별 벤치마크 지표 비교");
+                            ui.separator();
+                            egui::Grid::new("benchmark_grid").striped(true).show(ui, |ui| {
+                                ui.label("포맷");
+                                ui.label("압축 후 크기 (bytes)");
+                                ui.label("압축률 (낮을수록 우수)");
+                                ui.label("압축 시간");
+                                ui.end_row();
+
+                                // MZC
+                                ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "MZC (Lz77 + CM)");
+                                ui.label(self.benchmark_mzc_size.to_string());
+                                if self.original_size > 0 {
+                                    ui.label(format!("{:.2}%", (self.benchmark_mzc_size as f64 / self.original_size as f64) * 100.0));
+                                } else {
+                                    ui.label("-");
+                                }
+                                ui.label(format!("{:.4}s", self.benchmark_mzc_time));
+                                ui.end_row();
+
+                                // Gzip
+                                ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "Gzip (flate2)");
+                                ui.label(self.benchmark_gzip_size.to_string());
+                                if self.original_size > 0 {
+                                    ui.label(format!("{:.2}%", (self.benchmark_gzip_size as f64 / self.original_size as f64) * 100.0));
+                                } else {
+                                    ui.label("-");
+                                }
+                                ui.label(format!("{:.4}s", self.benchmark_gzip_time));
+                                ui.end_row();
+
+                                // Zstd
+                                ui.colored_label(egui::Color32::from_rgb(41, 121, 255), "Zstd (zstd)");
+                                ui.label(self.benchmark_zstd_size.to_string());
+                                if self.original_size > 0 {
+                                    ui.label(format!("{:.2}%", (self.benchmark_zstd_size as f64 / self.original_size as f64) * 100.0));
+                                } else {
+                                    ui.label("-");
+                                }
+                                ui.label(format!("{:.4}s", self.benchmark_zstd_time));
+                                ui.end_row();
+                            });
+                        });
+
+                        ui.add_space(15.0);
+
+                        // Size Plot Comparison
+                        ui.columns(2, |cols| {
+                            cols[0].vertical(|ui| {
+                                ui.label("📉 압축 후 크기 비교 (bytes) - 낮을수록 우수");
+                                let mzc_bar = Bar::new(0.5, self.benchmark_mzc_size as f64).name("MZC").fill(egui::Color32::from_rgb(45, 206, 137));
+                                let gzip_bar = Bar::new(1.5, self.benchmark_gzip_size as f64).name("Gzip").fill(egui::Color32::from_rgb(255, 196, 0));
+                                let zstd_bar = Bar::new(2.5, self.benchmark_zstd_size as f64).name("Zstd").fill(egui::Color32::from_rgb(41, 121, 255));
+                                let chart = BarChart::new(vec![mzc_bar, gzip_bar, zstd_bar]).width(0.6);
+
+                                Plot::new("benchmark_size_plot")
+                                    .height(180.0)
+                                    .show(ui, |plot_ui| {
+                                        plot_ui.bar_chart(chart);
+                                    });
+                            });
+
+                            cols[1].vertical(|ui| {
+                                ui.label("⏱ 압축 소요 시간 비교 (seconds) - 낮을수록 우수");
+                                let mzc_time_bar = Bar::new(0.5, self.benchmark_mzc_time).name("MZC").fill(egui::Color32::from_rgb(45, 206, 137));
+                                let gzip_time_bar = Bar::new(1.5, self.benchmark_gzip_time).name("Gzip").fill(egui::Color32::from_rgb(255, 196, 0));
+                                let zstd_time_bar = Bar::new(2.5, self.benchmark_zstd_time).name("Zstd").fill(egui::Color32::from_rgb(41, 121, 255));
+                                let chart = BarChart::new(vec![mzc_time_bar, gzip_time_bar, zstd_time_bar]).width(0.6);
+
+                                Plot::new("benchmark_time_plot")
+                                    .height(180.0)
+                                    .show(ui, |plot_ui| {
+                                        plot_ui.bar_chart(chart);
+                                    });
+                            });
+                        });
+                    }
+                }
+                // ================== Tab 4: CM Visualizer ==================
+                4 => {
+                    ui.heading("🔬 Context Mixing (CM) Bit Probability & Weights Visualizer");
+                    ui.label("디코딩 과정에서 각 비트마다 0차/1차/2차 문맥 정보의 기여 확률이 어떻게 변하고 가중치가 LMS 알고리즘을 통해 미세 학습 조율되는지 모사합니다.");
+                    ui.add_space(10.0);
+
+                    // Simulation auto-play timer trigger
+                    if self.cm_sim_autoplay && self.cm_sim_bit_idx < 8 {
+                        if self.cm_sim_last_step_time.elapsed() >= std::time::Duration::from_millis(1000) {
+                            self.step_cm_simulation();
+                            self.cm_sim_last_step_time = std::time::Instant::now();
+                        }
+                    }
+
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("대상 데이터: 1바이트 0x{:02X} (이진수: ", self.cm_sim_byte_val));
+                            for (idx, &b) in self.cm_sim_bits.iter().enumerate() {
+                                if idx == self.cm_sim_bit_idx {
+                                    ui.colored_label(egui::Color32::from_rgb(45, 206, 137), format!("[{}]", if b { "1" } else { "0" }));
+                                } else {
+                                    ui.label(if b { "1" } else { "0" });
+                                }
+                            }
+                            ui.label(")");
+
+                            ui.add_space(20.0);
+
+                            if ui.button("🔄 리셋").clicked() {
+                                self.init_cm_simulation();
+                            }
+                            if ui.button("▶ 1비트씩").clicked() {
+                                self.step_cm_simulation();
+                            }
+                            let play_label = if self.cm_sim_autoplay { "⏸ 정지" } else { "▶ 자동 실행" };
+                            if ui.button(play_label).clicked() {
+                                self.cm_sim_autoplay = !self.cm_sim_autoplay;
+                                self.cm_sim_last_step_time = std::time::Instant::now();
+                            }
+                        });
+                    });
+
+                    ui.add_space(10.0);
+
+                    // Display current state
+                    ui.columns(2, |cols| {
+                        cols[0].group(|ui| {
+                            ui.label(format!("비트 경로 상태: {}번째 비트 처리 중", self.cm_sim_bit_idx));
+                            ui.separator();
+                            ui.label(format!("현재 문맥 바이트(ctx_byte): 0x{:02X}", self.cm_sim_ctx_byte));
+                            ui.label(format!("직전 1바이트: 0x{:02X}", self.cm_sim_prev1));
+                            ui.label(format!("직전 2바이트: 0x{:02X}", self.cm_sim_prev2));
+                            ui.add_space(10.0);
+
+                            ui.label("각 차수별 예측 확률 (0=0%, 4096=100%):");
+                            ui.colored_label(egui::Color32::from_rgb(150, 150, 150), format!("0차 문맥 확률 (p0): {}", self.cm_sim_probabilities[0]));
+                            ui.colored_label(egui::Color32::from_rgb(255, 196, 0), format!("1차 문맥 확률 (p1): {}", self.cm_sim_probabilities[1]));
+                            ui.colored_label(egui::Color32::from_rgb(41, 121, 255), format!("2차 문맥 확률 (p2): {}", self.cm_sim_probabilities[2]));
+                            
+                            ui.add_space(5.0);
+                            ui.colored_label(egui::Color32::from_rgb(45, 206, 137), format!("최종 혼합 확률 (p): {}", self.cm_sim_mixed_p));
+                        });
+
+                        cols[1].group(|ui| {
+                            ui.label("🧠 LMS 적응형 가중치 상태");
+                            ui.separator();
+                            let w_idx = std::cmp::min(self.cm_sim_bit_idx, 7);
+                            let w = self.cm_sim_weights[w_idx];
+                            ui.label(format!("0차 문맥 가중치 (w0): {}", w[0]));
+                            ui.add(egui::ProgressBar::new(w[0] as f32 / 16384.0).fill(egui::Color32::from_rgb(150, 150, 150)));
+                            ui.label(format!("1차 문맥 가중치 (w1): {}", w[1]));
+                            ui.add(egui::ProgressBar::new(w[1] as f32 / 16384.0).fill(egui::Color32::from_rgb(255, 196, 0)));
+                            ui.label(format!("2차 문맥 가중치 (w2): {}", w[2]));
+                            ui.add(egui::ProgressBar::new(w[2] as f32 / 16384.0).fill(egui::Color32::from_rgb(41, 121, 255)));
+                        });
+                    });
+
+                    ui.add_space(15.0);
+
+                    // Range Coder Vertical Line Splitting Animation
+                    ui.group(|ui| {
+                        ui.label("📐 Range Coder 비트별 수직선 구간 분할 (0-영역 vs 1-영역)");
+                        ui.separator();
+
+                        let p_ratio = self.cm_sim_mixed_p as f32 / 4096.0;
+                        ui.horizontal(|ui| {
+                            let total_width = ui.available_width();
+                            let (rect, _response) = ui.allocate_exact_size(
+                                egui::vec2(total_width, 32.0),
+                                egui::Sense::hover()
+                            );
+                            
+                            // Draw splitting bar
+                            let painter = ui.painter();
+                            // Left part (0 bit, probability p)
+                            let split_x = rect.left() + total_width * p_ratio;
+                            let left_rect = egui::Rect::from_min_max(rect.left_top(), egui::pos2(split_x, rect.bottom()));
+                            painter.rect_filled(left_rect, 4.0, egui::Color32::from_rgb(45, 206, 137));
+                            // Right part (1 bit, probability 1 - p)
+                            let right_rect = egui::Rect::from_min_max(egui::pos2(split_x, rect.top()), rect.right_bottom());
+                            painter.rect_filled(right_rect, 4.0, egui::Color32::from_rgb(255, 100, 100));
+
+                            // Add texts
+                            painter.text(
+                                left_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                format!("0-영역 ({:.1}%)", p_ratio * 100.0),
+                                egui::FontId::monospace(14.0),
+                                egui::Color32::WHITE
+                            );
+                            painter.text(
+                                right_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                format!("1-영역 ({:.1}%)", (1.0 - p_ratio) * 100.0),
+                                egui::FontId::monospace(14.0),
+                                egui::Color32::WHITE
+                            );
+                        });
+                    });
                 }
                 _ => {}
             }

@@ -665,3 +665,412 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
 
     Ok(restored_bytes)
 }
+
+/// **Zero-Copy 디스크 I/O 스트리밍 압축 파이프라인**
+///
+/// 파일을 전체 로드하지 않고 1MB 단위의 청크로 순차 압축하여 지정된 Write+Seek 스트림으로 직접 써 내립니다.
+pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
+    reader: &mut R,
+    writer: &mut W,
+    mode: CompressionMode,
+    entropy: EntropyMode,
+    level: u8,
+    delta: bool,
+    bcj: bool,
+    png: bool,
+    lpc: bool,
+    dict_data: Option<&[u8]>,
+) -> Result<(), MzcError> {
+    use std::io::Write;
+    use sha2::{Sha256, Digest};
+    let is_v7 = entropy == EntropyMode::Cm || png || lpc;
+    // 1. 임시 헤더 영역 (56바이트) 예약 생성
+    let header_pos = writer.stream_position().map_err(|e| MzcError::IoError(e.to_string()))?;
+    let placeholder = vec![0u8; HEADER_SIZE_MZC2];
+    writer.write_all(&placeholder).map_err(|e| MzcError::IoError(e.to_string()))?;
+
+    // 2. 전체 SHA-256 및 사전 로드
+    let mut hasher = Sha256::new();
+    let global_dict = if let Some(bytes) = dict_data {
+        match Dictionary::from_bytes(bytes) {
+            Ok(d) => Some(d),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let global_dict_bytes = global_dict.as_ref().map(|d| d.to_bytes()).unwrap_or_default();
+    let dictionary_size = global_dict_bytes.len() as u16;
+    if dictionary_size > 0 {
+        writer.write_all(&global_dict_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+    }
+
+    // 3. 링 버퍼 대신 1MB 재사용 청크 버퍼를 통한 순차 청크 스트리밍 처리
+    let mut chunk_buf = vec![0u8; CHUNK_LIMIT];
+    let mut total_orig_size = 0u64;
+    let mut total_payload_size = global_dict_bytes.len() as u64;
+
+    loop {
+        let mut read_bytes = 0;
+        while read_bytes < CHUNK_LIMIT {
+            match reader.read(&mut chunk_buf[read_bytes..]) {
+                Ok(0) => break, // EOF 도달
+                Ok(n) => read_bytes += n,
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(MzcError::IoError(e.to_string())),
+            }
+        }
+
+        if read_bytes == 0 {
+            break; // 더 이상 입력이 없음
+        }
+
+        let chunk = &chunk_buf[..read_bytes];
+        hasher.update(chunk);
+        total_orig_size += read_bytes as u64;
+
+        let chunk_orig_size = read_bytes as u32;
+
+        let alg_type = match mode {
+            CompressionMode::Rle => ALGORITHM_RLE,
+            CompressionMode::Dict => ALGORITHM_DICT,
+            CompressionMode::Hybrid => ALGORITHM_HYBRID,
+            CompressionMode::Lz77 => ALGORITHM_LZ77,
+        };
+
+        // A. 전처리 필터 적용
+        let mut processed_chunk = chunk.to_vec();
+        if is_v7 {
+            if png {
+                filters::apply_png_filter(&mut processed_chunk);
+            } else if lpc {
+                filters::apply_lpc_filter(&mut processed_chunk);
+            } else {
+                if bcj {
+                    rle::apply_bcj_filter(&mut processed_chunk);
+                }
+                if delta {
+                    rle::apply_delta_filter(&mut processed_chunk);
+                }
+            }
+        } else {
+            if bcj {
+                rle::apply_bcj_filter(&mut processed_chunk);
+            }
+            if delta {
+                rle::apply_delta_filter(&mut processed_chunk);
+            }
+        }
+
+        // B. 사전 매칭
+        let dict = if let Some(ref g_dict) = global_dict {
+            g_dict.clone()
+        } else if alg_type != ALGORITHM_RLE {
+            build_dictionary(&processed_chunk)
+        } else {
+            Dictionary::new()
+        };
+
+        // C. RLE 하이브리드 압축
+        let config = rle::CompressionConfig::from_level(level);
+        let blocks = rle::compress_to_blocks(&processed_chunk, &dict, alg_type, &config);
+        let rle_payload = rle::serialize_blocks_v5(&blocks);
+
+        // D. 사전과 페이로드 결합
+        let combined = if global_dict.is_some() {
+            rle_payload
+        } else {
+            let mut combined = dict.to_bytes();
+            combined.extend_from_slice(&rle_payload);
+            combined
+        };
+
+        let chunk_comb_size = combined.len() as u32;
+
+        // E. 엔트로피 코딩 압축
+        let final_payload = if entropy == EntropyMode::Huffman {
+            huffman_compress(&combined)
+        } else if entropy == EntropyMode::Dynamic {
+            huffman_compress_dynamic(&combined)
+        } else if entropy == EntropyMode::Ans {
+            ans::ans_compress(&combined)?
+        } else if entropy == EntropyMode::Cm {
+            cm::cm_compress(&combined)?
+        } else {
+            combined
+        };
+
+        let chunk_comp_size = final_payload.len() as u32;
+
+        // F. 개별 청크 출력 쓰기: [Original Size] [Combined Size] [Compressed Size] + 압축 데이터
+        writer.write_all(&chunk_orig_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer.write_all(&chunk_comb_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer.write_all(&chunk_comp_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer.write_all(&final_payload).map_err(|e| MzcError::IoError(e.to_string()))?;
+
+        total_payload_size += (CHUNK_HEADER_SIZE + final_payload.len()) as u64;
+    }
+
+    // 4. 완료 시 파일 헤더 되찾기 및 갱신 (Seek Back)
+    let final_sha256 = hasher.finalize();
+    let mut sha256_array = [0u8; 32];
+    sha256_array.copy_from_slice(&final_sha256);
+
+    let algorithm_type_flag = if is_v7 {
+        let core_bits = match mode {
+            CompressionMode::Rle => 0,
+            CompressionMode::Dict => 1,
+            CompressionMode::Hybrid => 2,
+            CompressionMode::Lz77 => 3,
+        };
+        let entropy_bits = match entropy {
+            EntropyMode::None => 0,
+            EntropyMode::Huffman => 1,
+            EntropyMode::Dynamic => 2,
+            EntropyMode::Ans => 3,
+            EntropyMode::Cm => 4,
+        };
+        let filter_bits = if png {
+            3
+        } else if lpc {
+            4
+        } else if delta && bcj {
+            5
+        } else if delta {
+            1
+        } else if bcj {
+            2
+        } else {
+            0
+        };
+        core_bits | (entropy_bits << 2) | (filter_bits << 5)
+    } else {
+        let mut flag = match mode {
+            CompressionMode::Rle => ALGORITHM_RLE,
+            CompressionMode::Dict => ALGORITHM_DICT,
+            CompressionMode::Hybrid => ALGORITHM_HYBRID,
+            CompressionMode::Lz77 => ALGORITHM_LZ77,
+        };
+        if delta { flag |= FILTER_DELTA; }
+        if bcj { flag |= FILTER_BCJ; }
+        if entropy == EntropyMode::Dynamic { flag |= FILTER_DYNAMIC_HUFFMAN; }
+        if entropy == EntropyMode::Ans { flag |= FILTER_ANS; }
+        flag
+    };
+
+    let header = if is_v7 {
+        MzcHeader::new_v7(algorithm_type_flag, total_orig_size, total_payload_size, dictionary_size, sha256_array)
+    } else {
+        MzcHeader::new_v6(algorithm_type_flag, total_orig_size, total_payload_size, dictionary_size, sha256_array)
+    };
+
+    let end_pos = writer.stream_position().map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer.seek(std::io::SeekFrom::Start(header_pos)).map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer.write_all(&header.to_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer.seek(std::io::SeekFrom::Start(end_pos)).map_err(|e| MzcError::IoError(e.to_string()))?;
+
+    Ok(())
+}
+
+/// **Zero-Copy 디스크 I/O 스트리밍 압축 해제 파이프라인**
+///
+/// 파일 전체를 메모리에 적재하지 않고, 헤더와 순차 블록 단위로 읽어 직접 복원 스트림으로 출력합니다.
+pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+    dict_data: Option<&[u8]>,
+) -> Result<(), MzcError> {
+    use std::io::Read;
+    use sha2::Digest;
+
+    // 1. 헤더 영역 읽기
+    let mut header_bytes = [0u8; HEADER_SIZE_MZC2];
+    reader.read_exact(&mut header_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+    let header = MzcHeader::from_bytes(&header_bytes)?;
+
+    // 2. 전역 사전 읽기
+    let global_dict = if let Some(bytes) = dict_data {
+        Some(Dictionary::from_bytes(bytes)?)
+    } else if header.dictionary_size > 0 {
+        let mut dict_bytes = vec![0u8; header.dictionary_size as usize];
+        reader.read_exact(&mut dict_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+        Some(Dictionary::from_bytes(&dict_bytes)?)
+    } else {
+        None
+    };
+
+    // 3. 청크 순차 스트리밍 해제 루프
+    let mut total_bytes_read = header.dictionary_size as u64;
+    let mut total_orig_size = 0u64;
+    let mut hasher = sha2::Sha256::new();
+
+    while total_bytes_read < header.payload_size {
+        // 청크 헤더 (12바이트) 로드
+        let mut chunk_header = [0u8; CHUNK_HEADER_SIZE];
+        reader.read_exact(&mut chunk_header).map_err(|e| MzcError::IoError(e.to_string()))?;
+        total_bytes_read += CHUNK_HEADER_SIZE as u64;
+
+        let chunk_orig_size = u32::from_le_bytes(chunk_header[0..4].try_into().unwrap()) as usize;
+        let chunk_comb_size = u32::from_le_bytes(chunk_header[4..8].try_into().unwrap()) as usize;
+        let chunk_comp_size = u32::from_le_bytes(chunk_header[8..12].try_into().unwrap()) as usize;
+
+        if chunk_orig_size > CHUNK_LIMIT {
+            return Err(MzcError::OriginalSizeMismatch {
+                expected: CHUNK_LIMIT as u64,
+                found: chunk_orig_size as u64,
+            });
+        }
+        if chunk_comb_size > CHUNK_LIMIT * 4 {
+            return Err(MzcError::TruncatedBlock {
+                expected: CHUNK_LIMIT * 4,
+                found: chunk_comb_size,
+            });
+        }
+
+        // 압축 데이터 페이로드 로드
+        let mut chunk_data = vec![0u8; chunk_comp_size];
+        reader.read_exact(&mut chunk_data).map_err(|e| MzcError::IoError(e.to_string()))?;
+        total_bytes_read += chunk_comp_size as u64;
+
+        // 엔트로피 모드 역추론
+        let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
+            let entropy_bits = (header.algorithm_type >> 2) & 0x07;
+            (
+                entropy_bits == 1,
+                entropy_bits == 2,
+                entropy_bits == 3,
+                entropy_bits == 4,
+            )
+        } else {
+            (
+                header.version < VERSION_MZC7 && chunk_data.len() != chunk_comb_size && (header.version != VERSION_MZC4 && (header.version < VERSION_MZC5 || (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) == 0) && (header.version < VERSION_MZC6 || (header.algorithm_type & FILTER_ANS) == 0)),
+                header.version == VERSION_MZC4 || (header.version >= VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0),
+                header.version >= VERSION_MZC6 && (header.algorithm_type & FILTER_ANS) != 0,
+                false,
+            )
+        };
+
+        // 엔트로피 디코딩 복원
+        let decomp = if is_huffman {
+            huffman_decompress(&chunk_data, chunk_comb_size)?
+        } else if is_dynamic {
+            huffman_decompress_dynamic(&chunk_data, chunk_comb_size)?
+        } else if is_ans {
+            ans::ans_decompress(&chunk_data, chunk_comb_size)?
+        } else if is_cm {
+            cm::cm_decompress(&chunk_data, chunk_comb_size)?
+        } else {
+            chunk_data
+        };
+
+        if decomp.len() != chunk_comb_size {
+            return Err(MzcError::TruncatedBlock {
+                expected: chunk_comb_size,
+                found: decomp.len(),
+            });
+        }
+
+        // 사전 영역과 RLE 데이터 영역 분할 추출
+        let (dict, rle_payload) = if global_dict.is_some() {
+            (global_dict.as_ref().unwrap().clone(), decomp)
+        } else {
+            let dict = Dictionary::from_bytes(&decomp)?;
+            let dict_bytes = dict.to_bytes();
+            let rle_payload = decomp[dict_bytes.len()..].to_vec();
+            (dict, rle_payload)
+        };
+
+        // 알고리즘 플래그 파싱
+        let is_v7 = header.version == VERSION_MZC7;
+        let alg_type = if is_v7 {
+            let core_bits = header.algorithm_type & 0x03;
+            match core_bits {
+                0 => ALGORITHM_RLE,
+                1 => ALGORITHM_DICT,
+                2 => ALGORITHM_HYBRID,
+                3 => ALGORITHM_LZ77,
+                _ => unreachable!(),
+            }
+        } else {
+            let mut alg = header.algorithm_type & 0x0F;
+            if alg == 0 { alg = ALGORITHM_HYBRID; }
+            alg
+        };
+
+        // RLE 디코딩 복원
+        let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
+            rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_type, chunk_orig_size)?
+        } else {
+            rle_decompress_hybrid(&rle_payload, &dict, alg_type, chunk_orig_size)?
+        };
+
+        if decompressed_chunk.len() != chunk_orig_size {
+            return Err(MzcError::OriginalSizeMismatch {
+                expected: chunk_orig_size as u64,
+                found: decompressed_chunk.len() as u64,
+            });
+        }
+
+        // 예측 필터 역복원
+        if is_v7 {
+            let filter_bits = (header.algorithm_type >> 5) & 0x07;
+            match filter_bits {
+                1 => { rle::inverse_delta_filter(&mut decompressed_chunk); }
+                2 => { rle::inverse_bcj_filter(&mut decompressed_chunk); }
+                3 => { filters::inverse_png_filter(&mut decompressed_chunk); }
+                4 => { filters::inverse_lpc_filter(&mut decompressed_chunk); }
+                5 => {
+                    rle::inverse_delta_filter(&mut decompressed_chunk);
+                    rle::inverse_bcj_filter(&mut decompressed_chunk);
+                }
+                _ => {}
+            }
+        } else if header.version >= VERSION_MZC5 {
+            let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
+            let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
+            if has_delta {
+                rle::inverse_delta_filter(&mut decompressed_chunk);
+            }
+            if has_bcj {
+                rle::inverse_bcj_filter(&mut decompressed_chunk);
+            }
+        } else {
+            let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
+            let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
+            if has_delta && has_bcj {
+                rle::inverse_delta_filter(&mut decompressed_chunk);
+                rle::inverse_bcj_filter(&mut decompressed_chunk);
+            } else if has_delta {
+                rle::inverse_delta_filter(&mut decompressed_chunk);
+            } else if has_bcj {
+                rle::inverse_bcj_filter(&mut decompressed_chunk);
+            }
+        }
+
+        // 최종 디코딩 결과 쓰기 및 해시 누적
+        writer.write_all(&decompressed_chunk).map_err(|e| MzcError::IoError(e.to_string()))?;
+        hasher.update(&decompressed_chunk);
+        total_orig_size += chunk_orig_size as u64;
+    }
+
+    // 4. 완료 검증
+    if total_orig_size != header.original_size {
+        return Err(MzcError::OriginalSizeMismatch {
+            expected: header.original_size,
+            found: total_orig_size,
+        });
+    }
+
+    let computed_sha256 = hasher.finalize();
+    let mut computed_array = [0u8; 32];
+    computed_array.copy_from_slice(&computed_sha256);
+    if computed_array != header.original_sha256 {
+        return Err(MzcError::ChecksumMismatch {
+            expected: bytes_to_hex(&header.original_sha256),
+            found: bytes_to_hex(&computed_array),
+        });
+    }
+
+    Ok(())
+}

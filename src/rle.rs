@@ -81,30 +81,67 @@ impl Dictionary {
 /// - $L$ (패턴 크기, 4 ~ 16바이트)
 /// - $F$ (출현 빈도수)
 pub fn build_dictionary(data: &[u8]) -> Dictionary {
-    if data.len() < 10 {
+    let n = data.len();
+    if n < 10 {
         return Dictionary::default();
     }
 
-    let mut pattern_counts = HashMap::new();
-    let n = data.len();
-
-    // 1. 슬라이딩 윈도우 스캔 (패턴 크기 L: 4 ~ 16바이트 범위 조사)
-    for len in 4..=16 {
-        if len > n {
-            break;
+    // If the input data is too large, sample chunks of it to build the dictionary.
+    // This maintains high representative dictionary quality while keeping build time capped.
+    let sampled_data_holder;
+    let train_data = if n > 65536 {
+        let chunk_size = 16384;
+        let mut sampled = Vec::with_capacity(65536);
+        for step in 0..4 {
+            let start = (n - chunk_size) * step / 3;
+            sampled.extend_from_slice(&data[start..start + chunk_size]);
         }
-        for i in 0..=(n - len) {
-            let pattern = &data[i..i + len];
-            *pattern_counts.entry(pattern.to_vec()).or_insert(0usize) += 1;
+        sampled_data_holder = sampled;
+        &sampled_data_holder[..]
+    } else {
+        data
+    };
+
+    let n_train = train_data.len();
+
+    // 1. Suffix Array construction
+    let mut sa: Vec<usize> = (0..n_train).collect();
+    sa.sort_by(|&a, &b| train_data[a..].cmp(&train_data[b..]));
+
+    // 2. LCP (Longest Common Prefix) Array construction using Kasai's algorithm
+    let mut rank = vec![0; n_train];
+    for i in 0..n_train {
+        rank[sa[i]] = i;
+    }
+    let mut lcp = vec![0; n_train];
+    let mut h = 0;
+    for i in 0..n_train {
+        if rank[i] > 0 {
+            let j = sa[rank[i] - 1];
+            while i + h < n_train && j + h < n_train && train_data[i + h] == train_data[j + h] {
+                h += 1;
+            }
+            lcp[rank[i]] = h;
+            if h > 0 {
+                h -= 1;
+            }
         }
     }
 
-    // 2. 이득 평가 산출 및 스코어링
-    let mut candidates = Vec::new();
-    for (pattern, freq) in pattern_counts {
-        if freq < 2 {
-            continue; // 최소 2번 이상은 중복 출현해야 사전적 이득이 발생합니다.
+    // 3. Frequent pattern mining using LCP
+    let mut pattern_counts = HashMap::new();
+    for i in 1..n_train {
+        let max_len = std::cmp::min(lcp[i], 16);
+        for len in 4..=max_len {
+            let pattern_ref = &train_data[sa[i]..sa[i] + len];
+            *pattern_counts.entry(pattern_ref.to_vec()).or_insert(0usize) += 1;
         }
+    }
+
+    // 4. Scoring candidates
+    let mut candidates = Vec::new();
+    for (pattern, freq_minus_one) in pattern_counts {
+        let freq = freq_minus_one + 1; // Actual frequency
         let l = pattern.len();
         let score = ((l as isize - 3) * freq as isize) - (2 + l as isize);
         if score > 0 {
@@ -112,10 +149,10 @@ pub fn build_dictionary(data: &[u8]) -> Dictionary {
         }
     }
 
-    // 3. 고득점 순으로 정렬
+    // 5. Sort candidates by score descending
     candidates.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // 실무 최적화 성능과 빠른 인코딩을 위해 최대 사전 엔트리 개수를 256개로 제한합니다.
+    // Limit to at most 256 entries
     let limit = std::cmp::min(candidates.len(), 256);
     let mut entries = Vec::with_capacity(limit);
     for i in 0..limit {
@@ -158,8 +195,39 @@ impl CompressionConfig {
 }
 
 pub fn apply_delta_filter(data: &mut [u8]) {
-    if data.is_empty() { return; }
-    for i in (1..data.len()).rev() {
+    let n = data.len();
+    if n < 17 {
+        if n > 0 {
+            for i in (1..n).rev() {
+                data[i] = data[i].wrapping_sub(data[i - 1]);
+            }
+        }
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("sse2") {
+            let mut i = n - 1;
+            while i >= 16 {
+                let start_idx = i - 15;
+                unsafe {
+                    use std::arch::x86_64::*;
+                    let curr = _mm_loadu_si128(data[start_idx..].as_ptr() as *const __m128i);
+                    let prev = _mm_loadu_si128(data[start_idx - 1..].as_ptr() as *const __m128i);
+                    let diff = _mm_sub_epi8(curr, prev);
+                    _mm_storeu_si128(data[start_idx..].as_mut_ptr() as *mut __m128i, diff);
+                }
+                i -= 16;
+            }
+            for j in (1..=i).rev() {
+                data[j] = data[j].wrapping_sub(data[j - 1]);
+            }
+            return;
+        }
+    }
+
+    for i in (1..n).rev() {
         data[i] = data[i].wrapping_sub(data[i - 1]);
     }
 }
@@ -171,7 +239,7 @@ pub fn inverse_delta_filter(data: &mut [u8]) {
     }
 }
 
-pub fn apply_bcj_filter(data: &mut [u8]) {
+fn apply_x86_bcj(data: &mut [u8]) {
     let mut i = 0;
     if data.len() < 5 {
         return;
@@ -190,7 +258,7 @@ pub fn apply_bcj_filter(data: &mut [u8]) {
     }
 }
 
-pub fn inverse_bcj_filter(data: &mut [u8]) {
+fn inverse_x86_bcj(data: &mut [u8]) {
     let mut i = 0;
     if data.len() < 5 {
         return;
@@ -207,6 +275,134 @@ pub fn inverse_bcj_filter(data: &mut [u8]) {
             i += 1;
         }
     }
+}
+
+fn apply_arm64_bcj(data: &mut [u8]) {
+    let n = data.len();
+    if n < 4 {
+        return;
+    }
+    let mut i = 0;
+    while i + 3 < n {
+        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        let op = data[i+3];
+        if (op >= 0x14 && op <= 0x17) || (op >= 0x94 && op <= 0x97) {
+            let rel = inst & 0x03FFFFFF;
+            let mut rel_signed = rel as i32;
+            if (rel & 0x02000000) != 0 {
+                rel_signed |= -0x04000000;
+            }
+            let rel_bytes = rel_signed.wrapping_mul(4);
+            let abs_bytes = rel_bytes.wrapping_add(i as i32);
+            let new_rel = ((abs_bytes as u32) >> 2) & 0x03FFFFFF;
+            let new_inst = (inst & 0xFC000000) | new_rel;
+            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            i += 4;
+        } else {
+            i += 4;
+        }
+    }
+}
+
+fn inverse_arm64_bcj(data: &mut [u8]) {
+    let n = data.len();
+    if n < 4 {
+        return;
+    }
+    let mut i = 0;
+    while i + 3 < n {
+        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        let op = data[i+3];
+        if (op >= 0x14 && op <= 0x17) || (op >= 0x94 && op <= 0x97) {
+            let abs_val = inst & 0x03FFFFFF;
+            let abs_bytes = abs_val.wrapping_mul(4) as i32;
+            let rel_bytes = abs_bytes.wrapping_sub(i as i32);
+            let rel = ((rel_bytes >> 2) as u32) & 0x03FFFFFF;
+            let new_inst = (inst & 0xFC000000) | rel;
+            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            i += 4;
+        } else {
+            i += 4;
+        }
+    }
+}
+
+fn apply_riscv_bcj(data: &mut [u8]) {
+    let n = data.len();
+    if n < 4 {
+        return;
+    }
+    let mut i = 0;
+    while i + 3 < n {
+        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        if (inst & 0x7F) == 0x6F {
+            let imm20 = (inst >> 31) & 1;
+            let imm10_1 = (inst >> 21) & 0x3FF;
+            let imm11 = (inst >> 20) & 1;
+            let imm19_12 = (inst >> 12) & 0xFF;
+            let offset_scrambled = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+            let mut offset = offset_scrambled as i32;
+            if (offset & 0x100000) != 0 {
+                offset |= -0x200000;
+            }
+            let abs_addr = (i as i32).wrapping_add(offset);
+            let u_offset = abs_addr as u32;
+            let b20 = (u_offset >> 20) & 1;
+            let b10_1 = (u_offset >> 1) & 0x3FF;
+            let b11 = (u_offset >> 11) & 1;
+            let b19_12 = (u_offset >> 12) & 0xFF;
+            let new_inst = (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
+            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            i += 4;
+        } else {
+            i += 4;
+        }
+    }
+}
+
+fn inverse_riscv_bcj(data: &mut [u8]) {
+    let n = data.len();
+    if n < 4 {
+        return;
+    }
+    let mut i = 0;
+    while i + 3 < n {
+        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        if (inst & 0x7F) == 0x6F {
+            let imm20 = (inst >> 31) & 1;
+            let imm10_1 = (inst >> 21) & 0x3FF;
+            let imm11 = (inst >> 20) & 1;
+            let imm19_12 = (inst >> 12) & 0xFF;
+            let abs_addr_scrambled = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+            let mut abs_addr = abs_addr_scrambled as i32;
+            if (abs_addr & 0x100000) != 0 {
+                abs_addr |= -0x200000;
+            }
+            let offset = abs_addr.wrapping_sub(i as i32);
+            let u_offset = offset as u32;
+            let b20 = (u_offset >> 20) & 1;
+            let b10_1 = (u_offset >> 1) & 0x3FF;
+            let b11 = (u_offset >> 11) & 1;
+            let b19_12 = (u_offset >> 12) & 0xFF;
+            let new_inst = (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
+            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            i += 4;
+        } else {
+            i += 4;
+        }
+    }
+}
+
+pub fn apply_bcj_filter(data: &mut [u8]) {
+    apply_x86_bcj(data);
+    apply_arm64_bcj(data);
+    apply_riscv_bcj(data);
+}
+
+pub fn inverse_bcj_filter(data: &mut [u8]) {
+    inverse_riscv_bcj(data);
+    inverse_arm64_bcj(data);
+    inverse_x86_bcj(data);
 }
 
 pub fn find_lz77_match_with_limit(
@@ -297,6 +493,8 @@ impl Lz77HashChains {
             return None;
         }
 
+        let max_possible = std::cmp::min(data.len() - pos, MAX_BLOCK_LEN);
+
         let h = Self::hash(&data[pos..pos + 3]);
         let mut j = self.head[h];
         let mut best_dist = 0;
@@ -304,6 +502,10 @@ impl Lz77HashChains {
         let mut steps = 0;
 
         while j != -1 {
+            if best_len >= max_possible {
+                break;
+            }
+
             let match_pos = j as usize;
             let dist = pos - match_pos;
             if dist > window_size {
@@ -319,7 +521,6 @@ impl Lz77HashChains {
                 continue;
             }
 
-            let max_possible = std::cmp::min(data.len() - pos, MAX_BLOCK_LEN);
             let mut len = 0;
             while len < max_possible && data[match_pos + len] == data[pos + len] {
                 len += 1;

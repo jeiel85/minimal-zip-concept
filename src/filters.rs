@@ -119,14 +119,38 @@ pub fn apply_lpc_filter(data: &mut [u8]) {
     // `.clone()`: 깊은 복사(Deep Copy)를 통해 완전히 독립된 별개의 벡터 인스턴스를 하나 복제합니다.
     let orig = samples.clone();
     
-    // 2번 샘플 위치부터 시작하여 끝까지 2차 선형 예측 예측값을 빼나갑니다.
-    for i in 2..n {
+    let mut i = 2;
+
+    // x86_64 SSE2 하드웨어 가속
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("sse2") {
+            while i + 7 < n {
+                unsafe {
+                    use std::arch::x86_64::*;
+                    let val_i = _mm_loadu_si128(orig[i..].as_ptr() as *const __m128i);
+                    let val_prev1 = _mm_loadu_si128(orig[i-1..].as_ptr() as *const __m128i);
+                    let val_prev2 = _mm_loadu_si128(orig[i-2..].as_ptr() as *const __m128i);
+
+                    let two_prev1 = _mm_add_epi16(val_prev1, val_prev1);
+                    let pred = _mm_sub_epi16(two_prev1, val_prev2);
+                    let res = _mm_sub_epi16(val_i, pred);
+
+                    _mm_storeu_si128(samples[i..].as_mut_ptr() as *mut __m128i, res);
+                }
+                i += 8;
+            }
+        }
+    }
+    
+    // 2번 샘플 위치부터 시작하여 끝까지 2차 선형 예측 예측값을 빼나갑니다. (SIMD 루프 이후 잔여물 처리)
+    for j in i..n {
         // 오디오 샘플 연산 중 자리넘침을 예방하기 위해 i32 크기로 승격시킵니다.
-        let pred = 2 * orig[i - 1] as i32 - orig[i - 2] as i32;
+        let pred = 2 * orig[j - 1] as i32 - orig[j - 2] as i32;
         
         // 실제 오디오 파형 값에서 수학적으로 예측된 파형 값을 빼서 잔차를 계산합니다.
         // wrapping_sub을 수행하여 안전한 범위 정수 회전 뺄셈을 관철합니다.
-        samples[i] = (orig[i] as i32).wrapping_sub(pred) as i16;
+        samples[j] = (orig[j] as i32).wrapping_sub(pred) as i16;
     }
     
     // 도출된 예측 편차(잔차) 오디오 값들을 다시 리틀 엔디안 바이트 형태로 변환하여 최종 압축 데이터 버퍼에 써 넣습니다.
