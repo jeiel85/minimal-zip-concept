@@ -1,6 +1,10 @@
 use std::fs;
 use std::time::Instant;
+use std::io::{Write, Read};
 use mzc::cli::{CompressionMode, EntropyMode};
+use flate2::write::GzEncoder;
+use flate2::read::GzDecoder;
+use flate2::Compression;
 
 // LCG pseudo-random generator
 fn get_pseudo_random_bytes(seed: &mut u64, len: usize) -> Vec<u8> {
@@ -24,7 +28,7 @@ fn generate_text_dataset() -> Vec<u8> {
     let mut seed = 12345u64;
 
     while corpus.len() < 200_000 {
-        let template = log_templates[((seed % 4) as usize)];
+        let template = log_templates[(seed % 4) as usize];
         corpus.extend_from_slice(template.as_bytes());
         
         // Add random values to keep it realistic
@@ -91,6 +95,27 @@ struct BenchResult {
     decomp_time_ms: f64,
 }
 
+fn gzip_compress(data: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn gzip_decompress(data: &[u8]) -> Vec<u8> {
+    let mut decoder = GzDecoder::new(data);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).unwrap();
+    decompressed
+}
+
+fn zstd_compress(data: &[u8]) -> Vec<u8> {
+    zstd::bulk::compress(data, 3).unwrap()
+}
+
+fn zstd_decompress(data: &[u8], original_len: usize) -> Vec<u8> {
+    zstd::bulk::decompress(data, original_len).unwrap()
+}
+
 fn run_bench_on_dataset(
     name: &str,
     data: &[u8],
@@ -107,8 +132,8 @@ fn run_bench_on_dataset(
         ("MZC7 (Context Mixing)", CompressionMode::Hybrid, EntropyMode::Cm, 6, false, false, name == "Image", name == "Audio"),
     ];
 
+    // 1. MZC Coder benchmarks
     for (label, mode, entropy, level, delta, bcj, png, lpc) in test_cases {
-        // Measure compression
         let start_comp = Instant::now();
         let compressed = mzc::compress_bytes_v2(
             data,
@@ -122,7 +147,6 @@ fn run_bench_on_dataset(
         );
         let comp_duration = start_comp.elapsed().as_secs_f64() * 1000.0;
 
-        // Measure decompression
         let start_decomp = Instant::now();
         let decompressed = mzc::decompress_bytes_v2(&compressed)
             .expect("Decompression failure during benchmarking");
@@ -141,12 +165,56 @@ fn run_bench_on_dataset(
         });
     }
 
+    // 2. Gzip standard benchmark (via flate2)
+    {
+        let start_comp = Instant::now();
+        let compressed = gzip_compress(data);
+        let comp_duration = start_comp.elapsed().as_secs_f64() * 1000.0;
+
+        let start_decomp = Instant::now();
+        let decompressed = gzip_decompress(&compressed);
+        let decomp_duration = start_decomp.elapsed().as_secs_f64() * 1000.0;
+
+        assert_eq!(data, decompressed.as_slice(), "Gzip decompress mismatch!");
+        let ratio = (compressed.len() as f64 / data.len() as f64) * 100.0;
+
+        results.push(BenchResult {
+            version: "Gzip (flate2 Default)".to_string(),
+            ratio,
+            compressed_size: compressed.len(),
+            comp_time_ms: comp_duration,
+            decomp_time_ms: decomp_duration,
+        });
+    }
+
+    // 3. Zstd standard benchmark (via zstd crate)
+    {
+        let start_comp = Instant::now();
+        let compressed = zstd_compress(data);
+        let comp_duration = start_comp.elapsed().as_secs_f64() * 1000.0;
+
+        let start_decomp = Instant::now();
+        let decompressed = zstd_decompress(&compressed, data.len());
+        let decomp_duration = start_decomp.elapsed().as_secs_f64() * 1000.0;
+
+        assert_eq!(data, decompressed.as_slice(), "Zstd decompress mismatch!");
+        let ratio = (compressed.len() as f64 / data.len() as f64) * 100.0;
+
+        results.push(BenchResult {
+            version: "Zstd (Level 3)".to_string(),
+            ratio,
+            compressed_size: compressed.len(),
+            comp_time_ms: comp_duration,
+            decomp_time_ms: decomp_duration,
+        });
+    }
+
     results
 }
 
 fn main() {
-    println!("MZC Benchmarking Suite");
-    println!("======================\n");
+    println!("MZC Benchmarking Suite (with comparative industry standards)");
+    println!("==========================================================\n");
 
     let datasets = vec![
         ("Text", generate_text_dataset()),
@@ -156,8 +224,8 @@ fn main() {
     ];
 
     let mut md_report = String::new();
-    md_report.push_str("# MZC Lossless Compression Benchmark Results\n\n");
-    md_report.push_str("This document contains automatic benchmark evaluation results for MZC1 through MZC7 across different data types (Text, Audio, Image, Executable). All datasets are approximately 200KB in size.\n\n");
+    md_report.push_str("# MZC vs Industry Standards (Gzip / Zstd) Lossless Compression Benchmark Results\n\n");
+    md_report.push_str("This document contains automatic benchmark evaluation results comparing MZC versions (MZC1 through MZC7) with standard Gzip (RFC 1952) and Zstandard (Zstd) compression engines. All datasets are approximately 200KB in size.\n\n");
 
     for (name, data) in &datasets {
         println!("Benchmarking dataset: {} ({} bytes)...", name, data.len());
