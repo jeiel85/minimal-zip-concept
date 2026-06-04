@@ -58,6 +58,10 @@ jobs:
         mkdir dist
         cp target/${{ matrix.target }}/release/mzc.exe dist/
         Compress-Archive -Path dist/* -DestinationPath ${{ matrix.artifact_name }}.zip
+        New-Item -ItemType Directory -Force -Path target/release
+        Copy-Item target/${{ matrix.target }}/release/mzc.exe target/release/mzc.exe
+        iscc installer/setup.iss
+        Copy-Item installer/mzc-setup.exe .
 
     - name: Package Binary (Linux/macOS)
       if: matrix.os != 'windows-latest'
@@ -70,7 +74,11 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: ${{ matrix.artifact_name }}
-        path: ${{ matrix.artifact_name }}.${{ matrix.asset_type }}
+        path: |
+          *.zip
+          *.tar.gz
+          mzc-setup.exe
+        if-no-files-found: ignore
 
   create-github-release:
     name: Create GitHub Release
@@ -87,8 +95,8 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          mzc-linux-x64/mzc-linux-x64.tar.gz
-          mzc-windows-x64/mzc-windows-x64.zip
-          mzc-macos-x64/mzc-macos-x64.tar.gz
+          */*.tar.gz
+          */*.zip
+          */mzc-setup.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
