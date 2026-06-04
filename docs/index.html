@@ -489,10 +489,10 @@
         <!-- Hero Section -->
         <section class="hero">
             <div class="hero-info">
-                <span class="hero-badge">🚀 MZC v5.0.0 출시</span>
+                <span class="hero-badge">🚀 MZC v7.0.0 출시</span>
                 <h1 class="hero-title">Rust 기반 무손실 압축의 모든 원리를 담다</h1>
                 <p class="hero-desc">
-                    MZC (Minimal Zip Concept)는 단순한 압축기를 넘어, 바이트 단위 및 비트 단위의 직렬화, RLE, 사전 대치, LZ77 슬라이딩 윈도우, 점프 상대 주소 변환(BCJ), 델타 필터 및 Canonical Dynamic Huffman Coding까지 무손실 압축의 실전 구조를 설계하며 학습하는 러스트 지향 압축 엔진입니다.
+                    MZC (Minimal Zip Concept)는 단순한 압축기를 넘어, 바이트 단위 및 비트 단위의 직렬화, RLE, 사전 대치, LZ77 슬라이딩 윈도우, tANS 엔트로피 코더, 컨텍스트 믹싱 산술 코딩 및 미디어 예측 필터까지 무손실 압축의 핵심 구조 전체를 설계하며 학습하는 러스트 지향 압축 엔진입니다.
                 </p>
                 <div class="hero-actions">
                     <a href="https://github.com/jeiel85/minimal-zip-concept" target="_blank" class="btn btn-primary">
@@ -514,23 +514,23 @@
                 <p class="section-subtitle">압축 오버헤드를 극적으로 배제하고 성능을 조율하기 위해 추가된 주요 요소들입니다.</p>
             </div>
             <div class="feature-grid">
-                <!-- Bit-Level Packing -->
+                <!-- Context Mixing -->
                 <div class="feature-card">
-                    <div class="feature-icon">🪙</div>
-                    <h3 class="feature-title">비트 레벨 스트림 패킹</h3>
-                    <p class="feature-desc">블록마다 발생하는 바이트 단위(1B) 타입 오버헤드를 극복하기 위해, 압축 블록 8개마다 2바이트 플래그(2비트 x 8)로 비트 스트림화하여 선두에 기록함으로써 타입 공간을 약 15~25% 절약합니다.</p>
+                    <div class="feature-icon">🧠</div>
+                    <h3 class="feature-title">컨텍스트 믹싱 (MZC7)</h3>
+                    <p class="feature-desc">과거 비트 스트림의 출현 패턴을 0차, 1차, 2차(해시 직접 매핑) 문맥으로 나누어 실시간 예측하고, 가중치 결합 확률을 정밀 산술 영역으로 코딩하여 엔트로피 한계를 뛰어넘습니다.</p>
                 </div>
-                <!-- Lazy Matching -->
+                <!-- Media Filters -->
                 <div class="feature-card">
-                    <div class="feature-icon">⚡</div>
-                    <h3 class="feature-title">지연 매칭 및 압축 레벨</h3>
-                    <p class="feature-desc">그리디 방식의 즉시 매칭을 개선하여, 다음 바이트에서 더 효율적인 LZ77 일치가 발견될 경우 결정을 이월하는 지연 매칭(Lazy Matching) 기법을 탑재하고 압축 레벨(1~9)에 맞춰 연산 강도를 조절합니다.</p>
+                    <div class="feature-icon">🖼️</div>
+                    <h3 class="feature-title">미디어 전처리 예측 필터</h3>
+                    <p class="feature-desc">2D 가로/세로 그라디언트 픽셀의 중복을 없애는 PNG Paeth 필터와, 16비트 PCM 오디오 신호의 인접 파형 경향성을 2차 선형 예측하는 LPC 필터 전처리를 제공하여 압축 효율을 극대화합니다.</p>
                 </div>
-                <!-- Preprocessors -->
+                <!-- egui Multi-tab Dashboard -->
                 <div class="feature-card">
-                    <div class="feature-icon">🎹</div>
-                    <h3 class="feature-title">데이터 원시 전처리 필터</h3>
-                    <p class="feature-desc">바이너리의 엔트로피를 물리적으로 떨어뜨리는 x86 기계어 타겟 BCJ(Branch-Call-Jump) 상대 번지 대치 필터와 WAV/BMP 등 연속 파형 바이트의 차분값을 계산하는 Delta Filter를 제공합니다.</p>
+                    <div class="feature-icon">📊</div>
+                    <h3 class="feature-title">다중 탭 GUI 대시보드</h3>
+                    <p class="feature-desc">Rayon 병렬 스레드 가동률 및 Throughput 곡선을 보는 모니터와 함께, 파일들의 사전을 학습하는 Trainer 탭 및 tANS 알고리즘 상태 전이를 추적하는 Plot 시뮬레이터를 통합 기동합니다.</p>
                 </div>
             </div>
         </section>
@@ -539,7 +539,7 @@
         <section id="specs" class="specs">
             <div class="section-header">
                 <h2 class="section-title">MZC 하위 호환성 포맷 아키텍처</h2>
-                <p class="section-subtitle">MZC 엔진은 버전 1부터 최신 버전 5까지 유연한 이중 파싱 분기(Double-Dispatch)를 수행합니다.</p>
+                <p class="section-subtitle">MZC 엔진은 버전 1부터 최신 버전 7까지 유연한 이중 파싱 분기(Double-Dispatch)를 수행합니다.</p>
             </div>
             
             <div class="spec-tabs">
@@ -547,7 +547,9 @@
                 <button class="tab-btn" onclick="openSpec(event, 'mzc2')">MZC2 (Dictionary)</button>
                 <button class="tab-btn" onclick="openSpec(event, 'mzc3')">MZC3 (LZ77 Chunk)</button>
                 <button class="tab-btn" onclick="openSpec(event, 'mzc4')">MZC4 (Dynamic Huffman)</button>
-                <button class="tab-btn active" onclick="openSpec(event, 'mzc5')">MZC5 (Bit-Packed)</button>
+                <button class="tab-btn" onclick="openSpec(event, 'mzc5')">MZC5 (Bit-Packed)</button>
+                <button class="tab-btn" onclick="openSpec(event, 'mzc6')">MZC6 (tANS & Dict)</button>
+                <button class="tab-btn active" onclick="openSpec(event, 'mzc7')">MZC7 (Context Mixing)</button>
             </div>
 
             <div class="spec-content">
@@ -651,11 +653,11 @@
                 </div>
 
                 <!-- Tab MZC5 -->
-                <div id="mzc5" class="spec-panel active">
+                <div id="mzc5" class="spec-panel">
                     <div class="spec-info">
                         <span class="spec-tag">MZC5 Specification</span>
                         <h3 class="spec-name">비트 레벨 스트림 패킹 및 하이엔드 전처리</h3>
-                        <p class="spec-desc">바이트 정렬 한계를 완전히 무너뜨리고 8개 단위 플래그로 묶은 비트스트림 구조로 압축 메타데이터 오버헤드를 원천적으로 제거한 최상위 버전입니다.</p>
+                        <p class="spec-desc">바이트 정렬 한계를 완전히 무너뜨리고 8개 단위 플래그로 묶은 비트스트림 구조로 압축 메타데이터 오버헤드를 원천적으로 제거한 사양입니다.</p>
                         <ul class="spec-list">
                             <li>8블록 단위 16비트 플래그 스트림으로 타입 접두사 완전 대체</li>
                             <li>BCJ 상대 주소 대치 필터 및 Delta 필터 탑재</li>
@@ -671,6 +673,55 @@
 [RLE/Huffman Header Section]
 [Flag Stream: 2bit * 8 blocks] (2B)
 [Sequential Block payload stream...]
+                    </pre>
+                </div>
+
+                <!-- Tab MZC6 -->
+                <div id="mzc6" class="spec-panel">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC6 Specification</span>
+                        <h3 class="spec-name">tANS 엔트로피 & 공유 사전 학습</h3>
+                        <p class="spec-desc">Huffman의 1비트 한계를 깨부수는 Asymmetric Numeral Systems(tANS) 부호화 엔진과 중복 배제를 위한 공유 사전 방식을 채택했습니다.</p>
+                        <ul class="spec-list">
+                            <li>분수 비트 단위 압축을 실현하는 유한 상태 머신 기반 tANS 코더 탑재</li>
+                            <li>여러 샘플로부터 중복 시퀀스를 추출하여 학습하는 전역 공유 사전(.dict) 시스템</li>
+                            <li>개별 청크 단위 사전 선언을 스킵하여 메타 오버헤드 원천 배제</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC6"] (4B)
+[Version: 0x06] (1B)
+[Algorithm_Flag: Core | ANS Filter] (1B)
+... (56B Header)
+----------------------
+[Global Shared Dictionary] (dictionary_size)
+[Chunk 1 Header: Original | Combined | Compressed] (12B)
+[Chunk 1 tANS Payload Stream...]
+                    </pre>
+                </div>
+
+                <!-- Tab MZC7 -->
+                <div id="mzc7" class="spec-panel active">
+                    <div class="spec-info">
+                        <span class="spec-tag">MZC7 Specification</span>
+                        <h3 class="spec-name">컨텍스트 믹싱 & 미디어 최적화 필터</h3>
+                        <p class="spec-desc">과거 문맥 상태(0~2차)를 결합하는 컨텍스트 믹싱 모델 및 산술 레인지 부호화기, 그리고 이미지/오디오 전용 예측 전처리 필터를 지원합니다.</p>
+                        <ul class="spec-list">
+                            <li>0차/1차/2차 비트 발생 확률 가중치 혼합 및 정밀 산술(Range) 코더 탑재</li>
+                            <li>2D 이미지 데이터 중복을 없애는 PNG Paeth 필터 및 16비트 오디오를 위한 LPC 전처리 필터 제공</li>
+                            <li>RFC 1951/1952 표준 호환 GZIP 디코더(inflate) CLI 내장</li>
+                            <li>Trainer 탭 및 tANS Plot 그래프 시뮬레이션을 탑재한 멀티 탭 GUI 대시보드</li>
+                        </ul>
+                    </div>
+                    <pre class="spec-visual">
+[Magic Number: "MZC7"] (4B)
+[Version: 0x07] (1B)
+[Algorithm_Flag: Core | Entropy | Media_Filter] (1B)
+... (56B Header)
+----------------------
+[Global Shared Dictionary] (dictionary_size)
+[Chunk 1 Header: Original | Combined | Compressed] (12B)
+[Chunk 1 Context-Mixed Range Stream...]
                     </pre>
                 </div>
             </div>
@@ -695,13 +746,16 @@
 <span class="code-comment"># 2. 러스트 빌드 (릴리즈 모드)</span>
 <span class="code-keyword">cargo build</span> --release
 
-<span class="code-comment"># 3. CLI를 이용한 고성능 MZC5 압축 실행 (레벨9, Delta 활성화, BCJ 활성화)</span>
-./target/release/mzc compress input.bin output.mzc5 -m lz77 -e dynamic -l 9 --delta --bcj
+<span class="code-comment"># 3. CLI를 이용한 고성능 MZC7 압축 실행 (CM 모드, PNG 필터 활성화)</span>
+./target/release/mzc compress input_image.png output.mzc7 -m hybrid -e cm --png
 
 <span class="code-comment"># 4. 압축 파일 디코딩 및 복원 검사</span>
-./target/release/mzc decompress output.mzc5 restored.bin
+./target/release/mzc decompress output.mzc7 restored.png
 
-<span class="code-comment"># 5. 그래픽 GUI 성능 모니터 대시보드 뷰어 기동</span>
+<span class="code-comment"># 5. GZIP 표준 압축 파일 해제 (RFC 1952 디코딩)</span>
+./target/release/mzc inflate archive.gz restored.txt
+
+<span class="code-comment"># 6. 그래픽 GUI 성능 모니터 대시보드 뷰어 기동 (다중 탭 지원)</span>
 ./target/release/mzc gui</div>
             </div>
         </section>
@@ -733,7 +787,7 @@
         }
 
         // Initialize display for active tab
-        document.getElementById("mzc5").style.display = "flex";
+        document.getElementById("mzc7").style.display = "flex";
     </script>
 </body>
 </html>
