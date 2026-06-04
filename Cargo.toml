@@ -3,7 +3,13 @@ name = "mzc"
 version = "0.1.0"
 edition = "2021"
 authors = ["Antigravity"]
-description = "Minimal Zip Concept - A learning-oriented lossless compression CLI tool in Rust"
+description = "Minimal Zip Concept - A learning-oriented lossless compression CLI and GUI tool in Rust"
+license = "MIT"
+repository = "https://github.com/jeiel85/minimal-zip-concept"
+homepage = "https://github.com/jeiel85/minimal-zip-concept"
+readme = "README.md"
+keywords = ["compression", "lossless", "rle", "lz77", "ans"]
+categories = ["compression", "command-line-utilities", "gui"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }

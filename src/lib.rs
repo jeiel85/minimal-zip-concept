@@ -444,6 +444,7 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
     let mut chunk_slices = Vec::new();
     let mut pos = header.dictionary_size as usize;
     let n = payload_area.len();
+    let mut total_orig_size = 0u64;
 
     while pos < n {
         if pos + CHUNK_HEADER_SIZE > n {
@@ -462,6 +463,20 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
         let chunk_comb_size = u32::from_le_bytes(comb_size_bytes) as usize;
         let chunk_comp_size = u32::from_le_bytes(comp_size_bytes) as usize;
 
+        // Safety limit checks to prevent OOM on malformed inputs
+        if chunk_orig_size > CHUNK_LIMIT {
+            return Err(MzcError::OriginalSizeMismatch {
+                expected: CHUNK_LIMIT as u64,
+                found: chunk_orig_size as u64,
+            });
+        }
+        if chunk_comb_size > CHUNK_LIMIT * 4 {
+            return Err(MzcError::TruncatedBlock {
+                expected: CHUNK_LIMIT * 4,
+                found: chunk_comb_size,
+            });
+        }
+
         pos += CHUNK_HEADER_SIZE;
 
         if pos + chunk_comp_size > n {
@@ -474,6 +489,15 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
         let chunk_data = &payload_area[pos..pos + chunk_comp_size];
         chunk_slices.push((chunk_data, chunk_orig_size, chunk_comb_size));
         pos += chunk_comp_size;
+        total_orig_size += chunk_orig_size as u64;
+    }
+
+    // Verify parsed total size matches header original size to prevent OOM
+    if total_orig_size != header.original_size {
+        return Err(MzcError::OriginalSizeMismatch {
+            expected: header.original_size,
+            found: total_orig_size,
+        });
     }
 
     // C. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩 (par_iter + map)
