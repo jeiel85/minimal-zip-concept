@@ -744,6 +744,7 @@
                 <a href="#features">기능</a>
                 <a href="#specs">포맷 규격</a>
                 <a href="#web-demo">웹 데모</a>
+                <a href="#lz77-sim">LZ77 시뮬레이터</a>
                 <a href="#guide">사용법</a>
                 <a href="https://github.com/jeiel85/minimal-zip-concept" target="_blank">GitHub</a>
             </div>
@@ -1106,6 +1107,88 @@
                 </div>
             </div>
         </section>
+        <!-- LZ77 sliding window simulator section -->
+        <section id="lz77-sim" class="web-demo">
+            <div class="section-header">
+                <h2 class="section-title">LZ77 슬라이딩 윈도우 시뮬레이터</h2>
+                <p class="section-subtitle">LZ77 슬라이딩 윈도우 알고의 동작 과정을 시각적으로 확인해 보세요.</p>
+            </div>
+
+            <div class="demo-card">
+                <div style="margin-bottom: 24px; text-align: left;">
+                    <div class="options-group">
+                        <label class="options-label">시뮬레이션 입력 문자열:</label>
+                        <input type="text" id="lz77-txt-input" class="select-input" value="banana_bandana" style="font-family: var(--font-mono); font-size: 16px;">
+                    </div>
+                    <div style="display: flex; gap: 24px; margin-top: 16px;">
+                        <div style="flex: 1;">
+                            <label class="options-label">Search Window 크기 (4~64):</label>
+                            <input type="range" id="lz77-w-slider" min="4" max="64" value="16" style="width:100%; accent-color: var(--primary);">
+                            <span id="lz77-w-val" class="range-val" style="display: inline-block; margin-top: 4px;">16 글자</span>
+                        </div>
+                        <div style="flex: 1;">
+                            <label class="options-label">Look-ahead Buffer 크기 (3~16):</label>
+                            <input type="range" id="lz77-la-slider" min="3" max="16" value="8" style="width:100%; accent-color: var(--primary);">
+                            <span id="lz77-la-val" class="range-val" style="display: inline-block; margin-top: 4px;">8 글자</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="demo-actions" style="margin-bottom: 24px; justify-content: center;">
+                    <button id="lz77-start-btn" class="btn btn-primary" style="margin: 0 auto; display: block;">🔄 시뮬레이션 시작</button>
+                </div>
+
+                <!-- Visualization Area -->
+                <div id="lz77-vis-area" style="display:none; animation: fadeIn 0.4s ease-out;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
+                        <span id="lz77-step-info" style="font-weight: 600;">단계: 1 / 1</span>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <button id="lz77-prev-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">◀ 이전</button>
+                            <button id="lz77-play-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">▶ 자동 실행</button>
+                            <button id="lz77-next-btn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 13px;">▶ 다음</button>
+                            <span style="font-size: 13px; color: var(--text-muted); margin-left: 12px;">속도:</span>
+                            <input type="range" id="lz77-speed-slider" min="200" max="2000" step="100" value="1000" style="width: 80px; accent-color: var(--primary);">
+                        </div>
+                    </div>
+
+                    <!-- Character grid -->
+                    <div class="options-label" style="text-align: left;">📟 슬라이딩 윈도우 메모리 그리드</div>
+                    <div id="lz77-grid-container" style="overflow-x: auto; display: flex; gap: 4px; padding: 16px; background: #0c0d10; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 16px; min-height: 72px;">
+                        <!-- Grid cells will be generated here -->
+                    </div>
+
+                    <!-- Legend -->
+                    <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; font-size: 13px;">
+                        <span style="display: flex; align-items: center; gap: 6px;"><span style="display:inline-block; width:12px; height:12px; background:#228b22; border-radius:2px;"></span>Search Window</span>
+                        <span style="display: flex; align-items: center; gap: 6px;"><span style="display:inline-block; width:12px; height:12px; background:#2979ff; border-radius:2px;"></span>Look-ahead Buffer</span>
+                        <span style="display: flex; align-items: center; gap: 6px;"><span style="display:inline-block; width:12px; height:12px; background:#ffc400; border-radius:2px;"></span>Match Found</span>
+                        <span style="display: flex; align-items: center; gap: 6px;"><span style="display:inline-block; width:12px; height:12px; background:#ff3c3c; border-radius:2px;"></span>Cursor Pointer</span>
+                    </div>
+
+                    <!-- Detail cards -->
+                    <div class="stats-grid" style="margin-bottom: 24px;">
+                        <div class="stat-card" style="grid-column: span 2;">
+                            <div class="stat-lbl" style="text-align: left;">현재 단계 동작 분석</div>
+                            <div class="stat-val" id="lz77-step-desc" style="font-size:15px; color: var(--primary); text-align: left; margin-top: 8px; font-weight: normal; line-height: 1.4;">-</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-lbl">현재 커서 (Cursor)</div>
+                            <div class="stat-val" id="lz77-step-cursor">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-lbl">출력 토큰 (Token)</div>
+                            <div class="stat-val" id="lz77-step-token" style="font-family: var(--font-mono); font-size: 16px;">0</div>
+                        </div>
+                    </div>
+
+                    <!-- Step list -->
+                    <div class="options-label" style="text-align: left;">📋 토큰 출력 이력</div>
+                    <div id="lz77-history-container" class="terminal-box" style="max-height: 180px;">
+                        <!-- History lines will be generated here -->
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <!-- CLI Guide Section -->
         <section id="guide" class="guide">
@@ -1458,7 +1541,289 @@
         });
 
         // Start initialization
+        // Start initialization
         initWasm();
+
+        // --- LZ77 Web Simulator JS Logic ---
+        let lz77Steps = [];
+        let lz77CurrentStep = 0;
+        let lz77PlayTimer = null;
+        let lz77IsPlaying = false;
+
+        const lz77TxtInput = document.getElementById("lz77-txt-input");
+        const lz77WSlider = document.getElementById("lz77-w-slider");
+        const lz77LaSlider = document.getElementById("lz77-la-slider");
+        const lz77WVal = document.getElementById("lz77-w-val");
+        const lz77LaVal = document.getElementById("lz77-la-val");
+        
+        const lz77StartBtn = document.getElementById("lz77-start-btn");
+        const lz77VisArea = document.getElementById("lz77-vis-area");
+        const lz77StepInfo = document.getElementById("lz77-step-info");
+        
+        const lz77PrevBtn = document.getElementById("lz77-prev-btn");
+        const lz77PlayBtn = document.getElementById("lz77-play-btn");
+        const lz77NextBtn = document.getElementById("lz77-next-btn");
+        const lz77SpeedSlider = document.getElementById("lz77-speed-slider");
+        
+        const lz77GridContainer = document.getElementById("lz77-grid-container");
+        const lz77StepDesc = document.getElementById("lz77-step-desc");
+        const lz77StepCursor = document.getElementById("lz77-step-cursor");
+        const lz77StepToken = document.getElementById("lz77-step-token");
+        const lz77HistoryContainer = document.getElementById("lz77-history-container");
+
+        // Update slider texts
+        lz77WSlider.addEventListener("input", (e) => {
+            lz77WVal.textContent = e.target.value + " 글자";
+        });
+        lz77LaSlider.addEventListener("input", (e) => {
+            lz77LaVal.textContent = e.target.value + " 글자";
+        });
+
+        lz77StartBtn.addEventListener("click", () => {
+            stopAutoplay();
+            calculateLz77Steps();
+            if (lz77Steps.length > 0) {
+                lz77CurrentStep = 0;
+                lz77VisArea.style.display = "block";
+                renderLz77Step();
+                generateLz77History();
+            }
+        });
+
+        lz77PrevBtn.addEventListener("click", () => {
+            stopAutoplay();
+            if (lz77CurrentStep > 0) {
+                lz77CurrentStep--;
+                renderLz77Step();
+            }
+        });
+
+        lz77NextBtn.addEventListener("click", () => {
+            stopAutoplay();
+            if (lz77CurrentStep < lz77Steps.length - 1) {
+                lz77CurrentStep++;
+                renderLz77Step();
+            }
+        });
+
+        lz77PlayBtn.addEventListener("click", () => {
+            if (lz77IsPlaying) {
+                stopAutoplay();
+            } else {
+                startAutoplay();
+            }
+        });
+
+        function startAutoplay() {
+            lz77IsPlaying = true;
+            lz77PlayBtn.textContent = "⏸ 일시정지";
+            const speed = parseInt(lz77SpeedSlider.value);
+            
+            lz77PlayTimer = setInterval(() => {
+                if (lz77CurrentStep < lz77Steps.length - 1) {
+                    lz77CurrentStep++;
+                    renderLz77Step();
+                } else {
+                    stopAutoplay();
+                }
+            }, speed);
+        }
+
+        function stopAutoplay() {
+            lz77IsPlaying = false;
+            lz77PlayBtn.textContent = "▶ 자동 실행";
+            if (lz77PlayTimer) {
+                clearInterval(lz77PlayTimer);
+                lz77PlayTimer = null;
+            }
+        }
+
+        lz77SpeedSlider.addEventListener("input", () => {
+            if (lz77IsPlaying) {
+                stopAutoplay();
+                startAutoplay();
+            }
+        });
+
+        function calculateLz77Steps() {
+            const text = lz77TxtInput.value;
+            const wSize = parseInt(lz77WSlider.value);
+            const laSize = parseInt(lz77LaSlider.value);
+            
+            lz77Steps = [];
+            if (!text) return;
+            
+            const chars = Array.from(text);
+            let cursor = 0;
+            
+            while (cursor < chars.length) {
+                const searchStart = Math.max(0, cursor - wSize);
+                const lookaheadEnd = Math.min(chars.length, cursor + laSize);
+                
+                let bestOffset = 0;
+                let bestLen = 0;
+                
+                for (let i = searchStart; i < cursor; i++) {
+                    let matchLen = 0;
+                    while (cursor + matchLen < chars.length && matchLen < laSize) {
+                        if (chars[i + (matchLen % (cursor - i))] === chars[cursor + matchLen]) {
+                            matchLen++;
+                        } else {
+                            break;
+                        }
+                    }
+                    if (matchLen > bestLen) {
+                        bestLen = matchLen;
+                        bestOffset = cursor - i;
+                    }
+                }
+                
+                let offset, len, nextChar;
+                if (bestLen >= 2) {
+                    nextChar = cursor + bestLen < chars.length ? chars[cursor + bestLen] : "";
+                    offset = bestOffset;
+                    len = bestLen;
+                } else {
+                    nextChar = chars[cursor];
+                    offset = 0;
+                    len = 0;
+                }
+                
+                let description = "";
+                if (len > 0) {
+                    const matchStr = chars.slice(cursor, cursor + len).join("");
+                    description = `일치 발견: 오프셋 ${offset}, 길이 ${len} (패턴: "${matchStr}"), 다음 문자: "${nextChar || " 없음"}"`;
+                } else {
+                    description = `일치 없음: 리터럴 문자 "${nextChar}" 출력`;
+                }
+                
+                lz77Steps.push({
+                    cursor,
+                    searchStart,
+                    searchLen: cursor - searchStart,
+                    lookaheadStart: cursor,
+                    lookaheadLen: lookaheadEnd - cursor,
+                    matchOffset: offset,
+                    matchLen: len,
+                    matchChar: nextChar,
+                    description
+                });
+                
+                if (len > 0) {
+                    cursor += len + (nextChar !== "" ? 1 : 0);
+                } else {
+                    cursor += 1;
+                }
+            }
+        }
+
+        function renderLz77Step() {
+            if (lz77Steps.length === 0) return;
+            
+            const step = lz77Steps[lz77CurrentStep];
+            const text = lz77TxtInput.value;
+            const chars = Array.from(text);
+            
+            lz77StepInfo.textContent = `단계: ${lz77CurrentStep + 1} / ${lz77Steps.length}`;
+            lz77StepDesc.textContent = step.description;
+            lz77StepCursor.textContent = step.cursor;
+            
+            if (step.matchLen > 0) {
+                lz77StepToken.textContent = `<${step.matchOffset}, ${step.matchLen}, "${step.matchChar || ""}">`;
+            } else {
+                lz77StepToken.textContent = `<0, 0, "${step.matchChar}">`;
+            }
+            
+            // Clear grid
+            lz77GridContainer.innerHTML = "";
+            
+            chars.forEach((c, idx) => {
+                const cell = document.createElement("div");
+                cell.style.minWidth = "28px";
+                cell.style.height = "36px";
+                cell.style.display = "flex";
+                cell.style.alignItems = "center";
+                cell.style.justifyContent = "center";
+                cell.style.borderRadius = "4px";
+                cell.style.fontWeight = "bold";
+                cell.style.fontFamily = "var(--font-mono)";
+                cell.style.fontSize = "15px";
+                cell.style.color = "#ffffff";
+                cell.style.position = "relative";
+                cell.textContent = c;
+                
+                const isSearch = idx >= step.searchStart && idx < step.searchStart + step.searchLen;
+                const isLookahead = idx >= step.lookaheadStart && idx < step.lookaheadStart + step.lookaheadLen;
+                const isMatch = step.matchLen > 0 && idx >= step.cursor - step.matchOffset && idx < step.cursor - step.matchOffset + step.matchLen;
+                
+                if (isLookahead) {
+                    cell.style.background = "#2979ff"; // Blue
+                } else if (isMatch) {
+                    cell.style.background = "#ffc400"; // Amber
+                } else if (isSearch) {
+                    cell.style.background = "#228b22"; // Green
+                } else {
+                    cell.style.background = "#28282d"; // Dark Gray
+                }
+                
+                // Cursor marker
+                if (idx === step.cursor) {
+                    const marker = document.createElement("div");
+                    marker.style.position = "absolute";
+                    marker.style.bottom = "0";
+                    marker.style.left = "0";
+                    marker.style.right = "0";
+                    marker.style.height = "4px";
+                    marker.style.background = "#ff3c3c";
+                    cell.appendChild(marker);
+                }
+                
+                lz77GridContainer.appendChild(cell);
+            });
+            
+            // Update history styling
+            const lines = lz77HistoryContainer.children;
+            for (let i = 0; i < lines.length; i++) {
+                if (i === lz77CurrentStep) {
+                    lines[i].style.color = "var(--primary)";
+                    lines[i].scrollIntoView({ block: "nearest", behavior: "smooth" });
+                } else {
+                    lines[i].style.color = "#b9b9c0";
+                }
+            }
+        }
+
+        function generateLz77History() {
+            lz77HistoryContainer.innerHTML = "";
+            lz77Steps.forEach((st, idx) => {
+                const line = document.createElement("div");
+                line.className = "terminal-line";
+                line.style.transition = "color 0.2s";
+                
+                const stepNum = document.createElement("span");
+                stepNum.style.marginRight = "12px";
+                stepNum.style.fontWeight = "bold";
+                stepNum.textContent = `단계 ${idx + 1}:`;
+                
+                const token = document.createElement("span");
+                token.style.fontFamily = "var(--font-mono)";
+                token.style.marginRight = "16px";
+                if (st.matchLen > 0) {
+                    token.textContent = `<${st.matchOffset}, ${st.matchLen}, "${st.matchChar || ""}">`;
+                } else {
+                    token.textContent = `<0, 0, "${st.matchChar}">`;
+                }
+                
+                const desc = document.createElement("span");
+                desc.style.color = "#8f9099";
+                desc.textContent = st.description;
+                
+                line.appendChild(stepNum);
+                line.appendChild(token);
+                line.appendChild(desc);
+                lz77HistoryContainer.appendChild(line);
+            });
+        }
     </script>
 </body>
 </html>

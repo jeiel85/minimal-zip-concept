@@ -102,7 +102,26 @@ enum TaskResult {
     UpdateCheckResult(Result<UpdateInfo, String>),
     UpdateDownloadProgress(f32),
     UpdateDownloadDone(PathBuf),
+    FilterBenchmarkDone {
+        delta_simd_speed: f64,
+        delta_scalar_speed: f64,
+        lpc_simd_speed: f64,
+        lpc_scalar_speed: f64,
+    },
     Error(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct Lz77Step {
+    pub cursor: usize,
+    pub search_start: usize,
+    pub search_len: usize,
+    pub lookahead_start: usize,
+    pub lookahead_len: usize,
+    pub match_offset: usize,
+    pub match_len: usize,
+    pub match_char: String,
+    pub description: String,
 }
 
 /// **MZC Desktop GUI의 핵심 상태를 보관하는 통합 앱 구조체입니다.**
@@ -149,7 +168,25 @@ pub struct MzcGuiApp {
     chunk_throughputs: Vec<f64>,
     chunk_savings: Vec<f64>,
 
-    // 중앙 판넬의 현재 탭 위치 (0: Dashboard, 1: Dict Trainer, 2: tANS Simulation, 3: Benchmark, 4: CM Visualizer)
+    // LZ77 시뮬레이터 탭 전용 상태
+    lz77_input: String,
+    lz77_search_window: usize,
+    lz77_lookahead_window: usize,
+    lz77_steps: Vec<Lz77Step>,
+    lz77_current_step: usize,
+    lz77_is_playing: bool,
+    lz77_play_speed: f32, // 초 단위
+    lz77_last_play_time: std::time::Instant,
+
+    // 필터 SIMD 벤치마크 탭 전용 상태
+    simd_enabled: bool,
+    filter_bench_delta_simd: f64,
+    filter_bench_delta_scalar: f64,
+    filter_bench_lpc_simd: f64,
+    filter_bench_lpc_scalar: f64,
+    filter_bench_active: bool,
+
+    // 중앙 판넬의 현재 탭 위치 (0: Dashboard, 1: Dict Trainer, 2: tANS Simulation, 3: Benchmark, 4: CM Visualizer, 5: LZ77 Visualizer)
     active_tab: usize,
 
     // 사전 학습 탭(Train Tab) 전용 상태
@@ -248,6 +285,20 @@ impl MzcGuiApp {
             chunk_ratios: Vec::new(),
             chunk_throughputs: Vec::new(),
             chunk_savings: Vec::new(),
+            lz77_input: "banana_bandana".to_string(),
+            lz77_search_window: 16,
+            lz77_lookahead_window: 8,
+            lz77_steps: Vec::new(),
+            lz77_current_step: 0,
+            lz77_is_playing: false,
+            lz77_play_speed: 1.0,
+            lz77_last_play_time: std::time::Instant::now(),
+            simd_enabled: true,
+            filter_bench_delta_simd: 0.0,
+            filter_bench_delta_scalar: 0.0,
+            filter_bench_lpc_simd: 0.0,
+            filter_bench_lpc_scalar: 0.0,
+            filter_bench_active: false,
             active_tab: 0,
             train_files: Vec::new(),
             train_output_path: PathBuf::from("trained.dict"),
@@ -1156,6 +1207,90 @@ impl MzcGuiApp {
         });
     }
 
+    fn spawn_filter_benchmark_task(&self, file_path: Option<PathBuf>) {
+        let sender = self.task_sender.clone();
+        std::thread::spawn(move || {
+            // Load data
+            let data = if let Some(ref path) = file_path {
+                match std::fs::read(path) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        let _ = sender.send(TaskResult::Error(format!("파일 로드 실패: {}", e)));
+                        return;
+                    }
+                }
+            } else {
+                // Generate 10MB of pseudo-random data for testing
+                let mut temp = vec![0u8; 10_000_000];
+                let mut seed = 123456789u64;
+                for byte in temp.iter_mut() {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    *byte = (seed >> 56) as u8;
+                }
+                temp
+            };
+
+            if data.is_empty() {
+                let _ = sender.send(TaskResult::Error("데이터가 비어 있습니다.".to_string()));
+                return;
+            }
+
+            let size_mb = data.len() as f64 / 1_000_000.0; // MB size
+
+            // 1. Delta Filter Benchmark
+            // SIMD Enabled
+            crate::ENABLE_SIMD.store(true, std::sync::atomic::Ordering::Relaxed);
+            let mut delta_simd_data = data.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..5 {
+                crate::rle::apply_delta_filter(&mut delta_simd_data);
+            }
+            let delta_simd_dur = start.elapsed().as_secs_f64() / 5.0;
+            let delta_simd_speed = size_mb / delta_simd_dur;
+
+            // SIMD Disabled
+            crate::ENABLE_SIMD.store(false, std::sync::atomic::Ordering::Relaxed);
+            let mut delta_scalar_data = data.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..5 {
+                crate::rle::apply_delta_filter(&mut delta_scalar_data);
+            }
+            let delta_scalar_dur = start.elapsed().as_secs_f64() / 5.0;
+            let delta_scalar_speed = size_mb / delta_scalar_dur;
+
+            // 2. LPC Filter Benchmark
+            // SIMD Enabled
+            crate::ENABLE_SIMD.store(true, std::sync::atomic::Ordering::Relaxed);
+            let mut lpc_simd_data = data.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..5 {
+                crate::filters::apply_lpc_filter(&mut lpc_simd_data);
+            }
+            let lpc_simd_dur = start.elapsed().as_secs_f64() / 5.0;
+            let lpc_simd_speed = size_mb / lpc_simd_dur;
+
+            // SIMD Disabled
+            crate::ENABLE_SIMD.store(false, std::sync::atomic::Ordering::Relaxed);
+            let mut lpc_scalar_data = data.clone();
+            let start = std::time::Instant::now();
+            for _ in 0..5 {
+                crate::filters::apply_lpc_filter(&mut lpc_scalar_data);
+            }
+            let lpc_scalar_dur = start.elapsed().as_secs_f64() / 5.0;
+            let lpc_scalar_speed = size_mb / lpc_scalar_dur;
+
+            // Restore SIMD to true
+            crate::ENABLE_SIMD.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            let _ = sender.send(TaskResult::FilterBenchmarkDone {
+                delta_simd_speed,
+                delta_scalar_speed,
+                lpc_simd_speed,
+                lpc_scalar_speed,
+            });
+        });
+    }
+
     /// **CM 확률 맵 시뮬레이션 상태 초기화**
     fn init_cm_simulation(&mut self) {
         self.cm_sim_bit_idx = 0;
@@ -1363,6 +1498,19 @@ impl eframe::App for MzcGuiApp {
                     self.benchmark_zstd_time = zstd_time;
                     self.benchmark_status = "벤치마크 테스트 완료!".to_string();
                 }
+                TaskResult::FilterBenchmarkDone {
+                    delta_simd_speed,
+                    delta_scalar_speed,
+                    lpc_simd_speed,
+                    lpc_scalar_speed,
+                } => {
+                    self.filter_bench_active = false;
+                    self.filter_bench_delta_simd = delta_simd_speed;
+                    self.filter_bench_delta_scalar = delta_scalar_speed;
+                    self.filter_bench_lpc_simd = lpc_simd_speed;
+                    self.filter_bench_lpc_scalar = lpc_scalar_speed;
+                    self.benchmark_status = "필터 SIMD 성능 벤치마크 완료!".to_string();
+                }
                 TaskResult::UpdateCheckResult(res) => {
                     self.is_checking_update = false;
                     self.update_checked = true;
@@ -1455,6 +1603,12 @@ impl eframe::App for MzcGuiApp {
                     ui.checkbox(&mut self.lpc_enabled, "LPC PCM 오디오 필터 (MZC7)");
                     ui.checkbox(&mut self.delta_enabled, "Delta 차분 필터");
                     ui.checkbox(&mut self.bcj_enabled, "BCJ 기계어 필터");
+                    
+                    let mut simd_val = self.simd_enabled;
+                    if ui.checkbox(&mut simd_val, "SIMD 하드웨어 가속 활성화").changed() {
+                        self.simd_enabled = simd_val;
+                        crate::ENABLE_SIMD.store(self.simd_enabled, std::sync::atomic::Ordering::Relaxed);
+                    }
 
                     // 상호 배타 필터 충돌 방지 연동 제어
                     if self.png_enabled {
@@ -1662,6 +1816,7 @@ impl eframe::App for MzcGuiApp {
                 ui.selectable_value(&mut self.active_tab, 2, "📈 tANS Plot Simulator (상태 시뮬레이터)");
                 ui.selectable_value(&mut self.active_tab, 3, "⚔ Benchmark (실시간 비교 벤치마크)");
                 ui.selectable_value(&mut self.active_tab, 4, "🔬 CM Visualizer (확률 노드 시각화)");
+                ui.selectable_value(&mut self.active_tab, 5, "🧩 LZ77 Simulator (슬라이딩 윈도우 시뮬레이터)");
             });
             ui.separator();
 
@@ -2182,6 +2337,103 @@ impl eframe::App for MzcGuiApp {
                             });
                         });
                     }
+
+                    ui.add_space(20.0);
+                    ui.separator();
+                    ui.add_space(10.0);
+
+                    ui.heading("⚡ Core Preprocessor SIMD Acceleration Benchmark");
+                    ui.label("LPC (오디오 예측) 및 Delta (시계열) 필터의 CPU 벡터 명령어(AVX2 / NEON) 가속 효과를 측정합니다.");
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        let btn = ui.add_enabled(!self.filter_bench_active, egui::Button::new("🚀 필터 SIMD 성능 측정 시작"));
+                        if btn.clicked() {
+                            self.filter_bench_active = true;
+                            self.benchmark_status = "필터 SIMD 벤치마크 실행 중...".to_string();
+                            self.spawn_filter_benchmark_task(self.benchmark_file_path.clone());
+                        }
+                        if self.filter_bench_active {
+                            ui.spinner();
+                        }
+                    });
+
+                    if self.filter_bench_delta_simd > 0.0 || self.filter_bench_lpc_simd > 0.0 {
+                        ui.add_space(15.0);
+                        ui.group(|ui| {
+                            ui.label("📊 필터별 처리 속도 비교 (MB/s) - 높을수록 우수");
+                            ui.separator();
+
+                            egui::Grid::new("filter_benchmark_grid").striped(true).show(ui, |ui| {
+                                ui.label("필터 유형");
+                                ui.label("Scalar (순차) 속도");
+                                ui.label("SIMD (벡터 가속) 속도");
+                                ui.label("성능 향상율");
+                                ui.end_row();
+
+                                // Delta
+                                ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "Delta Filter");
+                                ui.label(format!("{:.2} MB/s", self.filter_bench_delta_scalar));
+                                ui.label(format!("{:.2} MB/s", self.filter_bench_delta_simd));
+                                let delta_ratio = if self.filter_bench_delta_scalar > 0.0 {
+                                    self.filter_bench_delta_simd / self.filter_bench_delta_scalar
+                                } else {
+                                    1.0
+                                };
+                                ui.colored_label(
+                                    if delta_ratio >= 1.1 { egui::Color32::from_rgb(45, 206, 137) } else { egui::Color32::WHITE },
+                                    format!("{:.2}x", delta_ratio)
+                                );
+                                ui.end_row();
+
+                                // LPC
+                                ui.colored_label(egui::Color32::from_rgb(41, 121, 255), "LPC Filter");
+                                ui.label(format!("{:.2} MB/s", self.filter_bench_lpc_scalar));
+                                ui.label(format!("{:.2} MB/s", self.filter_bench_lpc_simd));
+                                let lpc_ratio = if self.filter_bench_lpc_scalar > 0.0 {
+                                    self.filter_bench_lpc_simd / self.filter_bench_lpc_scalar
+                                } else {
+                                    1.0
+                                };
+                                ui.colored_label(
+                                    if lpc_ratio >= 1.1 { egui::Color32::from_rgb(45, 206, 137) } else { egui::Color32::WHITE },
+                                    format!("{:.2}x", lpc_ratio)
+                                );
+                                ui.end_row();
+                            });
+                        });
+
+                        ui.add_space(15.0);
+
+                        // Bar chart for SIMD comparison
+                        ui.columns(2, |cols| {
+                            cols[0].vertical(|ui| {
+                                ui.label("📉 Delta 필터 속도 비교 (MB/s)");
+                                let scalar_bar = Bar::new(0.5, self.filter_bench_delta_scalar).name("Scalar").fill(egui::Color32::from_rgb(180, 180, 180));
+                                let simd_bar = Bar::new(1.5, self.filter_bench_delta_simd).name("SIMD (AVX2/NEON)").fill(egui::Color32::from_rgb(45, 206, 137));
+                                let chart = BarChart::new(vec![scalar_bar, simd_bar]).width(0.6);
+
+                                Plot::new("delta_simd_plot")
+                                    .height(150.0)
+                                    .show(ui, |plot_ui| {
+                                        plot_ui.bar_chart(chart);
+                                    });
+                            });
+
+                            cols[1].vertical(|ui| {
+                                ui.label("⏱ LPC 필터 속도 비교 (MB/s)");
+                                let scalar_bar = Bar::new(0.5, self.filter_bench_lpc_scalar).name("Scalar").fill(egui::Color32::from_rgb(180, 180, 180));
+                                let simd_bar = Bar::new(1.5, self.filter_bench_lpc_simd).name("SIMD (AVX2/NEON)").fill(egui::Color32::from_rgb(41, 121, 255));
+                                let chart = BarChart::new(vec![scalar_bar, simd_bar]).width(0.6);
+
+                                Plot::new("lpc_simd_plot")
+                                    .height(150.0)
+                                    .show(ui, |plot_ui| {
+                                        plot_ui.bar_chart(chart);
+                                    });
+                            });
+                        });
+                    }
                 }
                 // ================== Tab 4: CM Visualizer ==================
                 4 => {
@@ -2309,6 +2561,10 @@ impl eframe::App for MzcGuiApp {
                         });
                     });
                 }
+                // ================== Tab 5: LZ77 Visualizer ==================
+                5 => {
+                    self.render_lz77_visualizer(ui);
+                }
                 _ => {}
             }
         });
@@ -2434,6 +2690,296 @@ impl eframe::App for MzcGuiApp {
 
         // 비동기 채널 폴링 반응성 확보
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    }
+}
+
+impl MzcGuiApp {
+    fn render_lz77_visualizer(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🧩 LZ77 Sliding Window Compression Visualizer");
+        ui.label("LZ77 압축 과정에서 슬라이딩 윈도우(Search Buffer)와 Look-ahead Buffer가 어떻게 텍스트 바이트를 탐색하고 매칭 정보로 대치하는지 애니메이션 단계별로 모사합니다.");
+        ui.add_space(10.0);
+
+        // Auto-play trigger
+        if self.lz77_is_playing && !self.lz77_steps.is_empty() {
+            let delay = (self.lz77_play_speed * 1000.0) as u64;
+            if self.lz77_last_play_time.elapsed() >= std::time::Duration::from_millis(delay) {
+                if self.lz77_current_step + 1 < self.lz77_steps.len() {
+                    self.lz77_current_step += 1;
+                } else {
+                    self.lz77_is_playing = false; // reached end
+                }
+                self.lz77_last_play_time = std::time::Instant::now();
+            }
+        }
+
+        // Input controls
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label("시뮬레이션 입력 문자열:");
+                let response = ui.text_edit_singleline(&mut self.lz77_input);
+                if response.changed() || self.lz77_steps.is_empty() {
+                    self.recalculate_lz77_steps();
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Search Window 크기:");
+                let w_resp = ui.add(egui::Slider::new(&mut self.lz77_search_window, 4..=64).text("글자"));
+                ui.add_space(20.0);
+                ui.label("Look-ahead Buffer 크기:");
+                let l_resp = ui.add(egui::Slider::new(&mut self.lz77_lookahead_window, 3..=16).text("글자"));
+
+                if w_resp.changed() || l_resp.changed() {
+                    self.recalculate_lz77_steps();
+                }
+            });
+        });
+
+        ui.add_space(10.0);
+
+        if self.lz77_steps.is_empty() {
+            ui.colored_label(egui::Color32::YELLOW, "입력 문자열을 확인해 주세요.");
+            return;
+        }
+
+        // Playback controls
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("단계: {} / {}", self.lz77_current_step + 1, self.lz77_steps.len()));
+
+                ui.add_space(20.0);
+
+                if ui.button("⏮ 처음으로").clicked() {
+                    self.lz77_current_step = 0;
+                    self.lz77_is_playing = false;
+                }
+
+                if ui.button("◀ 이전 단계").clicked() {
+                    if self.lz77_current_step > 0 {
+                        self.lz77_current_step -= 1;
+                    }
+                    self.lz77_is_playing = false;
+                }
+
+                let play_lbl = if self.lz77_is_playing { "⏸ 일시정지" } else { "▶ 자동 실행" };
+                if ui.button(play_lbl).clicked() {
+                    self.lz77_is_playing = !self.lz77_is_playing;
+                    self.lz77_last_play_time = std::time::Instant::now();
+                }
+
+                if ui.button("▶ 다음 단계").clicked() {
+                    if self.lz77_current_step + 1 < self.lz77_steps.len() {
+                        self.lz77_current_step += 1;
+                    }
+                    self.lz77_is_playing = false;
+                }
+
+                ui.add_space(20.0);
+                ui.label("자동 실행 속도:");
+                ui.add(egui::Slider::new(&mut self.lz77_play_speed, 0.2..=3.0).text("초"));
+            });
+        });
+
+        ui.add_space(15.0);
+
+        let step = &self.lz77_steps[self.lz77_current_step];
+
+        // 1. Sliding Window Tape rendering
+        ui.label("📟 슬라이딩 윈도우 메모리 그리드");
+        let char_vec: Vec<char> = self.lz77_input.chars().collect();
+        
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (idx, &c) in char_vec.iter().enumerate() {
+                    let is_search = idx >= step.search_start && idx < step.search_start + step.search_len;
+                    let is_lookahead = idx >= step.lookahead_start && idx < step.lookahead_start + step.lookahead_len;
+                    let is_match = step.match_len > 0 
+                        && idx >= step.cursor - step.match_offset 
+                        && idx < step.cursor - step.match_offset + step.match_len;
+                    
+                    let bg_color = if is_lookahead {
+                        egui::Color32::from_rgb(41, 121, 255) // Blue for Look-ahead
+                    } else if is_match {
+                        egui::Color32::from_rgb(255, 196, 0) // Amber for matching area
+                    } else if is_search {
+                        egui::Color32::from_rgb(34, 139, 34) // Green for search buffer
+                    } else {
+                        egui::Color32::from_rgb(40, 40, 45) // Dark Gray for inactive
+                    };
+
+                    let (rect, _response) = ui.allocate_exact_size(
+                        egui::vec2(28.0, 36.0),
+                        egui::Sense::hover()
+                    );
+
+                    let painter = ui.painter();
+                    painter.rect_filled(rect, 4.0, bg_color);
+                    
+                    let text_color = egui::Color32::WHITE;
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        c.to_string(),
+                        egui::FontId::monospace(15.0),
+                        text_color
+                    );
+
+                    // Underline index or cursor pointer
+                    if idx == step.cursor {
+                        let pointer_rect = egui::Rect::from_min_max(
+                            egui::pos2(rect.left(), rect.bottom() - 4.0),
+                            egui::pos2(rect.right(), rect.bottom())
+                        );
+                        painter.rect_filled(pointer_rect, 0.0, egui::Color32::from_rgb(255, 60, 60));
+                    }
+                }
+            });
+        });
+
+        // Legend
+        ui.horizontal(|ui| {
+            ui.colored_label(egui::Color32::from_rgb(34, 139, 34), "■ Search Window");
+            ui.add_space(10.0);
+            ui.colored_label(egui::Color32::from_rgb(41, 121, 255), "■ Look-ahead Buffer");
+            ui.add_space(10.0);
+            ui.colored_label(egui::Color32::from_rgb(255, 196, 0), "■ Match Found");
+            ui.add_space(10.0);
+            ui.colored_label(egui::Color32::from_rgb(255, 60, 60), "■ Cursor Pointer");
+        });
+
+        ui.add_space(15.0);
+
+        // 2. Current step info
+        ui.group(|ui| {
+            ui.heading("📝 현재 프레임 분석");
+            ui.colored_label(egui::Color32::from_rgb(45, 206, 137), &step.description);
+            
+            ui.add_space(5.0);
+            ui.label(format!(" - 커서 위치 (Cursor): {}", step.cursor));
+            ui.label(format!(" - 검색 버퍼 범위 (Search Buffer): {} ~ {} (길이: {})", step.search_start, step.search_start + step.search_len, step.search_len));
+            ui.label(format!(" - 탐색 버퍼 범위 (Look-ahead Buffer): {} ~ {} (길이: {})", step.lookahead_start, step.lookahead_start + step.lookahead_len, step.lookahead_len));
+            if step.match_len > 0 {
+                ui.label(format!(" - 출력 토큰 (Token): (오프셋: {}, 길이: {}, 다음문자: \"{}\")", step.match_offset, step.match_len, step.match_char));
+            } else {
+                ui.label(format!(" - 출력 토큰 (Token): (리터럴 문자: \"{}\")", step.match_char));
+            }
+        });
+
+        ui.add_space(10.0);
+
+        // 3. History steps log
+        ui.label("📋 생성된 압축 스트림 토큰 이력");
+        egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+            ui.group(|ui| {
+                for (i, st) in self.lz77_steps.iter().enumerate() {
+                    let is_current = i == self.lz77_current_step;
+                    let text_color = if is_current {
+                        egui::Color32::from_rgb(45, 206, 137)
+                    } else {
+                        egui::Color32::from_rgb(180, 180, 180)
+                    };
+
+                    ui.horizontal(|ui| {
+                        if is_current {
+                            ui.colored_label(text_color, "👉");
+                        } else {
+                            ui.label("  ");
+                        }
+                        
+                        let token_repr = if st.match_len > 0 {
+                            format!("<{}, {}, \"{}\">", st.match_offset, st.match_len, st.match_char)
+                        } else {
+                            format!("<0, 0, \"{}\">", st.match_char)
+                        };
+
+                        ui.colored_label(text_color, format!("단계 {:2}:  {}", i + 1, token_repr));
+                        ui.colored_label(egui::Color32::from_rgb(100, 100, 100), &st.description);
+                    });
+                }
+            });
+        });
+    }
+
+    fn recalculate_lz77_steps(&mut self) {
+        let chars: Vec<char> = self.lz77_input.chars().collect();
+        let mut steps = Vec::new();
+        let mut cursor = 0;
+        
+        if chars.is_empty() {
+            self.lz77_steps = steps;
+            self.lz77_current_step = 0;
+            return;
+        }
+
+        let w_size = self.lz77_search_window;
+        let la_size = self.lz77_lookahead_window;
+        
+        while cursor < chars.len() {
+            let search_start = cursor.saturating_sub(w_size);
+            let lookahead_end = std::cmp::min(chars.len(), cursor + la_size);
+            
+            let mut best_offset = 0;
+            let mut best_len = 0;
+            
+            for i in search_start..cursor {
+                let mut match_len = 0;
+                while cursor + match_len < chars.len() && match_len < la_size {
+                    if chars[i + match_len % (cursor - i)] == chars[cursor + match_len] {
+                        match_len += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if match_len > best_len {
+                    best_len = match_len;
+                    best_offset = cursor - i;
+                }
+            }
+            
+            let (offset, len, next_char) = if best_len >= 2 {
+                let next_c = if cursor + best_len < chars.len() {
+                    chars[cursor + best_len].to_string()
+                } else {
+                    "".to_string()
+                };
+                (best_offset, best_len, next_c)
+            } else {
+                (0, 0, chars[cursor].to_string())
+            };
+            
+            let description = if len > 0 {
+                format!(
+                    "일치 발견: 오프셋 {}, 길이 {} (패턴: \"{}\"), 다음 문자: \"{}\"",
+                    offset,
+                    len,
+                    chars[cursor..(cursor + len)].iter().collect::<String>(),
+                    next_char
+                )
+            } else {
+                format!("일치 없음: 리터럴 문자 \"{}\" 출력", next_char)
+            };
+            
+            steps.push(Lz77Step {
+                cursor,
+                search_start,
+                search_len: cursor - search_start,
+                lookahead_start: cursor,
+                lookahead_len: lookahead_end - cursor,
+                match_offset: offset,
+                match_len: len,
+                match_char: next_char.clone(),
+                description,
+            });
+            
+            if len > 0 {
+                cursor += len + (if !next_char.is_empty() { 1 } else { 0 });
+            } else {
+                cursor += 1;
+            }
+        }
+        
+        self.lz77_steps = steps;
+        self.lz77_current_step = 0;
     }
 }
 

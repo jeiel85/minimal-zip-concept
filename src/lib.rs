@@ -78,6 +78,9 @@ impl<'a, T: 'a> WasmParallelIteratorShim<'a, T> for [T] {
         self.iter()
     }
 }
+/// SIMD 가속 활성화 여부를 제어하는 전역 원자적 플래그입니다.
+pub static ENABLE_SIMD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 
 // [Rust 기초 설명]
 // - 숫자 표기 방식: `1_024_000`처럼 숫자 사이에 밑줄(_)을 넣으면 가독성이 향상됩니다. 컴파일러는 이를 일반 숫자 1024000과 동일하게 취급합니다.
@@ -93,6 +96,25 @@ pub const CHUNK_HEADER_SIZE: usize = 12;
 /// # Rust 개념 설명:
 /// - `&[u8]`: 바이트 데이터를 가리키는 읽기 전용 슬라이스 참조자입니다. 복사 오버헤드 없이 원본 데이터를 효율적으로 다룹니다.
 /// - `Vec<u8>`: 데이터를 동적으로 추가하거나 제거할 수 있는 힙(Heap) 메모리 할당 바이트 배열입니다.
+///
+/// # Examples
+/// ```
+/// use mzc::compress_bytes_v2;
+/// use mzc::cli::{CompressionMode, EntropyMode};
+///
+/// let data = b"Hello, MZC compression library!";
+/// let compressed = compress_bytes_v2(
+///     data,
+///     CompressionMode::Hybrid,
+///     EntropyMode::Ans,
+///     6,
+///     false, // delta
+///     false, // bcj
+///     false, // png
+///     false, // lpc
+/// );
+/// assert!(!compressed.is_empty());
+/// ```
 pub fn compress_bytes_v2(
     original: &[u8],
     mode: CompressionMode,
@@ -417,6 +439,26 @@ where
 }
 
 /// **MZC 압축 바이너리 전체를 읽어와 MZC1~MZC7 포맷을 자동 감별하고 멀티스레드로 각 청크를 병렬 해제합니다.**
+///
+/// # Examples
+/// ```
+/// use mzc::{compress_bytes_v2, decompress_bytes_v2};
+/// use mzc::cli::{CompressionMode, EntropyMode};
+///
+/// let data = b"Hello, MZC compression library!";
+/// let compressed = compress_bytes_v2(
+///     data,
+///     CompressionMode::Hybrid,
+///     EntropyMode::Ans,
+///     6,
+///     false, // delta
+///     false, // bcj
+///     false, // png
+///     false, // lpc
+/// );
+/// let decompressed = decompress_bytes_v2(&compressed).unwrap();
+/// assert_eq!(data.as_ref(), decompressed.as_slice());
+/// ```
 pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
     decompress_bytes_v2_dict(mzc_bytes, None)
 }

@@ -119,24 +119,71 @@ pub fn apply_lpc_filter(data: &mut [u8]) {
     // `.clone()`: 깊은 복사(Deep Copy)를 통해 완전히 독립된 별개의 벡터 인스턴스를 하나 복제합니다.
     let orig = samples.clone();
     
+    #[allow(unused_mut)]
     let mut i = 2;
 
-    // x86_64 SSE2 하드웨어 가속
+    let _simd_enabled = crate::ENABLE_SIMD.load(std::sync::atomic::Ordering::Relaxed);
+
+    // x86_64 하드웨어 가속 (AVX2 + SSE2)
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse2") {
+        if _simd_enabled {
+            // AVX2 가속 (16개 샘플씩 처리)
+            if is_x86_feature_detected!("avx2") && i + 15 < n {
+                while i + 15 < n {
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        let val_i = _mm256_loadu_si256(orig[i..].as_ptr() as *const __m256i);
+                        let val_prev1 = _mm256_loadu_si256(orig[i-1..].as_ptr() as *const __m256i);
+                        let val_prev2 = _mm256_loadu_si256(orig[i-2..].as_ptr() as *const __m256i);
+
+                        let two_prev1 = _mm256_add_epi16(val_prev1, val_prev1);
+                        let pred = _mm256_sub_epi16(two_prev1, val_prev2);
+                        let res = _mm256_sub_epi16(val_i, pred);
+
+                        _mm256_storeu_si256(samples[i..].as_mut_ptr() as *mut __m256i, res);
+                    }
+                    i += 16;
+                }
+            }
+
+            // SSE2 fallback (8개 샘플씩 처리)
+            if is_x86_feature_detected!("sse2") && i + 7 < n {
+                while i + 7 < n {
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        let val_i = _mm_loadu_si128(orig[i..].as_ptr() as *const __m128i);
+                        let val_prev1 = _mm_loadu_si128(orig[i-1..].as_ptr() as *const __m128i);
+                        let val_prev2 = _mm_loadu_si128(orig[i-2..].as_ptr() as *const __m128i);
+
+                        let two_prev1 = _mm_add_epi16(val_prev1, val_prev1);
+                        let pred = _mm_sub_epi16(two_prev1, val_prev2);
+                        let res = _mm_sub_epi16(val_i, pred);
+
+                        _mm_storeu_si128(samples[i..].as_mut_ptr() as *mut __m128i, res);
+                    }
+                    i += 8;
+                }
+            }
+        }
+    }
+
+    // ARM64 NEON 하드웨어 가속 (8개 샘플씩 처리)
+    #[cfg(target_arch = "aarch64")]
+    {
+        if _simd_enabled {
             while i + 7 < n {
                 unsafe {
-                    use std::arch::x86_64::*;
-                    let val_i = _mm_loadu_si128(orig[i..].as_ptr() as *const __m128i);
-                    let val_prev1 = _mm_loadu_si128(orig[i-1..].as_ptr() as *const __m128i);
-                    let val_prev2 = _mm_loadu_si128(orig[i-2..].as_ptr() as *const __m128i);
+                    use std::arch::aarch64::*;
+                    let val_i = vld1q_s16(orig[i..].as_ptr());
+                    let val_prev1 = vld1q_s16(orig[i-1..].as_ptr());
+                    let val_prev2 = vld1q_s16(orig[i-2..].as_ptr());
 
-                    let two_prev1 = _mm_add_epi16(val_prev1, val_prev1);
-                    let pred = _mm_sub_epi16(two_prev1, val_prev2);
-                    let res = _mm_sub_epi16(val_i, pred);
+                    let two_prev1 = vaddq_s16(val_prev1, val_prev1);
+                    let pred = vsubq_s16(two_prev1, val_prev2);
+                    let res = vsubq_s16(val_i, pred);
 
-                    _mm_storeu_si128(samples[i..].as_mut_ptr() as *mut __m128i, res);
+                    vst1q_s16(samples[i..].as_mut_ptr(), res);
                 }
                 i += 8;
             }

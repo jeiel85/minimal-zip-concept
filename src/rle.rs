@@ -205,18 +205,62 @@ pub fn apply_delta_filter(data: &mut [u8]) {
         return;
     }
 
+    let _simd_enabled = crate::ENABLE_SIMD.load(std::sync::atomic::Ordering::Relaxed);
+
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("sse2") {
+        if _simd_enabled {
+            let mut i = n - 1;
+            
+            // AVX2 가속 (32바이트씩 처리)
+            if is_x86_feature_detected!("avx2") && i >= 32 {
+                while i >= 32 {
+                    let start_idx = i - 31;
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        let curr = _mm256_loadu_si256(data[start_idx..].as_ptr() as *const __m256i);
+                        let prev = _mm256_loadu_si256(data[start_idx - 1..].as_ptr() as *const __m256i);
+                        let diff = _mm256_sub_epi8(curr, prev);
+                        _mm256_storeu_si256(data[start_idx..].as_mut_ptr() as *mut __m256i, diff);
+                    }
+                    i -= 32;
+                }
+            }
+            
+            // SSE2 fallback (16바이트씩 처리)
+            if is_x86_feature_detected!("sse2") && i >= 16 {
+                while i >= 16 {
+                    let start_idx = i - 15;
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        let curr = _mm_loadu_si128(data[start_idx..].as_ptr() as *const __m128i);
+                        let prev = _mm_loadu_si128(data[start_idx - 1..].as_ptr() as *const __m128i);
+                        let diff = _mm_sub_epi8(curr, prev);
+                        _mm_storeu_si128(data[start_idx..].as_mut_ptr() as *mut __m128i, diff);
+                    }
+                    i -= 16;
+                }
+            }
+            
+            for j in (1..=i).rev() {
+                data[j] = data[j].wrapping_sub(data[j - 1]);
+            }
+            return;
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        if _simd_enabled {
             let mut i = n - 1;
             while i >= 16 {
                 let start_idx = i - 15;
                 unsafe {
-                    use std::arch::x86_64::*;
-                    let curr = _mm_loadu_si128(data[start_idx..].as_ptr() as *const __m128i);
-                    let prev = _mm_loadu_si128(data[start_idx - 1..].as_ptr() as *const __m128i);
-                    let diff = _mm_sub_epi8(curr, prev);
-                    _mm_storeu_si128(data[start_idx..].as_mut_ptr() as *mut __m128i, diff);
+                    use std::arch::aarch64::*;
+                    let curr = vld1q_u8(data[start_idx..].as_ptr());
+                    let prev = vld1q_u8(data[start_idx - 1..].as_ptr());
+                    let diff = vsubq_u8(curr, prev);
+                    vst1q_u8(data[start_idx..].as_mut_ptr(), diff);
                 }
                 i -= 16;
             }
