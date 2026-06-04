@@ -147,6 +147,7 @@ pub struct MzcGuiApp {
     // 실시간 모니터링 통계 버퍼
     chunk_ratios: Vec<f64>,
     chunk_throughputs: Vec<f64>,
+    chunk_savings: Vec<f64>,
 
     // 중앙 판넬의 현재 탭 위치 (0: Dashboard, 1: Dict Trainer, 2: tANS Simulation, 3: Benchmark, 4: CM Visualizer)
     active_tab: usize,
@@ -246,6 +247,7 @@ impl MzcGuiApp {
             lpc_enabled: false,
             chunk_ratios: Vec::new(),
             chunk_throughputs: Vec::new(),
+            chunk_savings: Vec::new(),
             active_tab: 0,
             train_files: Vec::new(),
             train_output_path: PathBuf::from("trained.dict"),
@@ -1245,10 +1247,15 @@ impl eframe::App for MzcGuiApp {
                     if self.chunk_throughputs.len() <= chunk_idx {
                         self.chunk_throughputs.resize(chunk_idx + 1, 0.0);
                     }
+                    if self.chunk_savings.len() <= chunk_idx {
+                        self.chunk_savings.resize(chunk_idx + 1, 0.0);
+                    }
                     let ratio = if orig_size > 0 { (comp_size as f64 / orig_size as f64) * 100.0 } else { 100.0 };
                     let throughput = if duration > 0.0 { (orig_size as f64 / 1_024_000.0) / duration } else { 0.0 };
+                    let savings = (orig_size as f64 - comp_size as f64).max(0.0);
                     self.chunk_ratios[chunk_idx] = ratio;
                     self.chunk_throughputs[chunk_idx] = throughput;
+                    self.chunk_savings[chunk_idx] = savings;
 
                     // 원형 프로그레스 링 업데이트
                     self.chunks_completed = chunk_idx + 1;
@@ -1521,6 +1528,7 @@ impl eframe::App for MzcGuiApp {
                             self.is_processing = true;
                             self.chunk_ratios.clear();
                             self.chunk_throughputs.clear();
+                            self.chunk_savings.clear();
                             self.progress_ratio = 0.0;
                             self.throughput_current = 0.0;
                             self.chunks_completed = 0;
@@ -1889,6 +1897,14 @@ impl eframe::App for MzcGuiApp {
                         let throughput_points: PlotPoints = self.chunk_throughputs.iter().enumerate()
                             .map(|(i, &t)| [i as f64 + 1.0, t])
                             .collect();
+                        
+                        let mut cum_sum = 0.0;
+                        let savings_points: PlotPoints = self.chunk_savings.iter().enumerate()
+                            .map(|(i, &s)| {
+                                cum_sum += s;
+                                [i as f64 + 1.0, cum_sum]
+                            })
+                            .collect();
 
                         ui.columns(2, |cols| {
                             cols[0].vertical(|ui| {
@@ -1914,6 +1930,19 @@ impl eframe::App for MzcGuiApp {
                                     });
                             });
                         });
+
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.label("💾 저장 공간 누적 절약량 곡선 (Bytes saved) - 높을수록 우수");
+                        let line_savings = Line::new(savings_points)
+                            .color(egui::Color32::from_rgb(180, 100, 240))
+                            .name("누적 절약량");
+                        Plot::new("savings_plot")
+                            .height(110.0)
+                            .show(ui, |plot_ui| {
+                                plot_ui.line(line_savings);
+                            });
                     });
                 }
                 // ================== Tab 1: Dictionary Trainer ==================

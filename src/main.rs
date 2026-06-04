@@ -81,17 +81,50 @@ fn main() -> Result<()> {
             };
 
             // 고도화된 MZC 병렬 청크 압축 파이프라인 구동 (MZC7 기능 포함)
-            let final_output = mzc::compress_bytes_v2_dict(
-                &original_bytes,
-                mode,
-                entropy,
-                level,
-                delta,
-                bcj,
-                png,
-                lpc,
-                dict_bytes.as_deref(),
-            );
+            let final_output = if original_bytes.len() > 100 * 1024 {
+                use indicatif::{ProgressBar, ProgressStyle};
+                let chunk_size = 1024 * 1024; // 1MB chunks
+                let total_chunks = (original_bytes.len() + chunk_size - 1) / chunk_size;
+                
+                println!("대용량 파일 압축 중... (총 {}개 청크)", total_chunks);
+                let pb = ProgressBar::new(total_chunks as u64);
+                pb.set_style(
+                    ProgressStyle::default_bar()
+                        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} 청크 ({eta})")
+                        .unwrap()
+                        .progress_chars("#>-")
+                );
+                
+                let pb_clone = pb.clone();
+                let result = mzc::compress_bytes_v2_with_progress_dict(
+                    &original_bytes,
+                    mode,
+                    entropy,
+                    level,
+                    delta,
+                    bcj,
+                    png,
+                    lpc,
+                    dict_bytes.as_deref(),
+                    move |chunk_idx, _total, _, _| {
+                        pb_clone.set_position(chunk_idx as u64);
+                    }
+                );
+                pb.finish_with_message("압축 완료");
+                result
+            } else {
+                mzc::compress_bytes_v2_dict(
+                    &original_bytes,
+                    mode,
+                    entropy,
+                    level,
+                    delta,
+                    bcj,
+                    png,
+                    lpc,
+                    dict_bytes.as_deref(),
+                )
+            };
 
             // 최종 압축 파일 디스크에 저장
             fs::write(&out_file, &final_output)
@@ -150,8 +183,31 @@ fn main() -> Result<()> {
             };
 
             // 라이브러리의 검증 포함 통합 병렬 청크 압축 해제 파이프라인 구동
-            let decompressed_bytes = mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
-                .context("MZC 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
+            let decompressed_bytes = if compressed_bytes.len() > 100 * 1024 {
+                use indicatif::{ProgressBar, ProgressStyle};
+                
+                let pb = ProgressBar::new(100);
+                pb.set_style(
+                    ProgressStyle::default_bar()
+                        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} 청크 ({eta})")
+                        .unwrap()
+                        .progress_chars("#>-")
+                );
+                
+                let pb_clone = pb.clone();
+                let result = mzc::decompress_bytes_v2_with_progress_dict(
+                    &compressed_bytes,
+                    dict_bytes.as_deref(),
+                    move |chunk_idx, total_chunks| {
+                        pb_clone.set_length(total_chunks as u64);
+                        pb_clone.set_position(chunk_idx as u64);
+                    }
+                );
+                pb.finish_with_message("해제 완료");
+                result
+            } else {
+                mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
+            }.context("MZC 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
 
             // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
             if mzc::archive::is_mzar_archive(&decompressed_bytes) {

@@ -402,7 +402,20 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
 }
 
 /// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
+/// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
 pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> Result<Vec<u8>, MzcError> {
+    decompress_bytes_v2_with_progress_dict(mzc_bytes, dict_data, |_, _| {})
+}
+
+/// **진행 상태(Progress) 콜백을 지원하는 디코딩 엔트리포인트입니다.**
+pub fn decompress_bytes_v2_with_progress_dict<F>(
+    mzc_bytes: &[u8],
+    dict_data: Option<&[u8]>,
+    on_chunk_progress: F,
+) -> Result<Vec<u8>, MzcError>
+where
+    F: Fn(usize, usize) + Send + Sync + Clone,
+{
     if mzc_bytes.len() < 4 {
         return Err(MzcError::TruncatedHeader { read_bytes: mzc_bytes.len() });
     }
@@ -435,6 +448,7 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
                 found: bytes_to_hex(&computed_sha256),
             });
         }
+        on_chunk_progress(1, 1);
         return Ok(decompressed);
     }
 
@@ -524,6 +538,10 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
         });
     }
 
+    let chunk_count = chunk_slices.len();
+    let progress_counter = std::sync::atomic::AtomicUsize::new(0);
+    let on_chunk_progress_clone = on_chunk_progress.clone();
+
     // C. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩 (par_iter + map)
     let global_dict_ref = global_dict.as_ref();
     let decompressed_chunks: Result<Vec<Vec<u8>>, MzcError> = chunk_slices
@@ -569,6 +587,8 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
             };
 
             if unhuffman.len() < 2 && header.dictionary_size == 0 {
+                let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                on_chunk_progress_clone(current, chunk_count);
                 return Ok(unhuffman);
             }
 
@@ -659,6 +679,8 @@ pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> R
                 });
             }
 
+            let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            on_chunk_progress_clone(current, chunk_count);
             Ok(decompressed_chunk)
         })
         .collect();
@@ -1118,6 +1140,7 @@ pub fn register_context_menu() -> anyhow::Result<()> {
     // 3. .mzc 확장자 등록 및 우클릭 시 "MZC로 압축 해제하기" 추가
     run_reg_add(r"HKCU\Software\Classes\.mzc", "", "MzcArchive")?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive", "", "MZC 압축 파일")?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive\DefaultIcon", "", &format!("\"{}\",0", exe_str))?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "", "MZC로 압축 해제하기")?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "Icon", &exe_str)?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open\command", "", &format!("\"{}\" decompress \"%1\"", exe_str))?;
