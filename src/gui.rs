@@ -294,11 +294,39 @@ impl MzcGuiApp {
     fn spawn_check_update_task(&self) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
-            let url = "https://raw.githubusercontent.com/jeiel85/minimal-zip-concept/main/docs/latest_version.json";
-            match ureq::get(url).call() {
+            let url = "https://api.github.com/repos/jeiel85/minimal-zip-concept/releases/latest";
+            
+            #[derive(serde::Deserialize, Debug)]
+            struct GithubRelease {
+                tag_name: String,
+                html_url: String,
+                body: Option<String>,
+                assets: Vec<GithubAsset>,
+            }
+
+            #[derive(serde::Deserialize, Debug)]
+            struct GithubAsset {
+                name: String,
+                browser_download_url: String,
+            }
+
+            match ureq::get(url).set("User-Agent", "minimal-zip-concept-updater").call() {
                 Ok(response) => {
-                    match serde_json::from_reader::<_, UpdateInfo>(response.into_reader()) {
-                        Ok(info) => {
+                    match serde_json::from_reader::<_, GithubRelease>(response.into_reader()) {
+                        Ok(release) => {
+                            let clean_version = release.tag_name.trim_start_matches('v').to_string();
+                            let download_url = release.assets
+                                .iter()
+                                .find(|asset| asset.name.ends_with(".exe"))
+                                .map(|asset| asset.browser_download_url.clone())
+                                .unwrap_or_else(|| release.html_url.clone());
+                            
+                            let info = UpdateInfo {
+                                version: clean_version,
+                                url: download_url,
+                                changelog: release.body.unwrap_or_default(),
+                            };
+
                             let current_version = env!("CARGO_PKG_VERSION");
                             if is_newer_version(&info.version, current_version) {
                                 let _ = tx.send(TaskResult::UpdateCheckResult(Ok(info)));
