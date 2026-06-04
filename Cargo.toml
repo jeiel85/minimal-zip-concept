@@ -10,6 +10,15 @@ homepage = "https://github.com/jeiel85/minimal-zip-concept"
 readme = "README.md"
 keywords = ["compression", "context-mixing", "lz77", "tans", "archiver"]
 categories = ["compression", "command-line-utilities"]
+exclude = [
+    "docs/**",
+    "prompts/**",
+    "samples/**",
+    "installer/**",
+    "AppxManifest.xml",
+    ".github/**"
+]
+
 
 [lib]
 crate-type = ["cdylib", "rlib"]
