@@ -384,6 +384,268 @@
             margin-bottom: 8px;
         }
 
+        /* Web Demo Section */
+        .web-demo {
+            padding: 100px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .demo-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            backdrop-filter: blur(16px);
+            margin-top: 32px;
+        }
+
+        .demo-layout {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 32px;
+        }
+
+        @media (max-width: 900px) {
+            .demo-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .drop-zone {
+            border: 2px dashed rgba(45, 206, 137, 0.3);
+            border-radius: 12px;
+            padding: 48px 24px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.01);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 240px;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--primary);
+            background: rgba(45, 206, 137, 0.04);
+            box-shadow: 0 0 25px rgba(45, 206, 137, 0.1);
+        }
+
+        .drop-zone-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            transition: transform 0.3s;
+        }
+
+        .drop-zone:hover .drop-zone-icon {
+            transform: translateY(-5px);
+        }
+
+        .drop-zone-text {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .drop-zone-subtext {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .file-info-box {
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+        }
+
+        .file-name {
+            font-weight: 600;
+            font-size: 14px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 250px;
+            text-align: left;
+        }
+
+        .file-size {
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        .demo-actions {
+            margin-top: 24px;
+            display: flex;
+            gap: 16px;
+            width: 100%;
+        }
+
+        .demo-actions button {
+            flex: 1;
+        }
+
+        .options-group {
+            margin-bottom: 20px;
+        }
+
+        .options-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: block;
+            color: var(--text-main);
+            text-align: left;
+        }
+
+        .select-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: #121216;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            font-family: var(--font-main);
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .select-input:focus {
+            border-color: var(--primary);
+        }
+
+        .checkbox-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: color 0.3s;
+        }
+
+        .checkbox-label:hover {
+            color: var(--text-main);
+        }
+
+        .checkbox-input {
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .range-slider-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .range-slider {
+            flex: 1;
+            accent-color: var(--primary);
+            cursor: pointer;
+        }
+
+        .range-val {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 700;
+            min-width: 16px;
+        }
+
+        .results-panel {
+            margin-top: 32px;
+            padding-top: 32px;
+            border-top: 1px solid var(--border);
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--primary);
+            margin-top: 4px;
+        }
+
+        .stat-lbl {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .terminal-box {
+            background: #070709;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            max-height: 180px;
+            overflow-y: auto;
+            color: #b9b9c0;
+            line-height: 1.6;
+            text-align: left;
+        }
+
+        .terminal-line {
+            margin-bottom: 4px;
+        }
+
+        .terminal-time {
+            color: var(--secondary);
+            margin-right: 8px;
+        }
+
+        .terminal-info {
+            color: #8f9099;
+        }
+
+        .terminal-success {
+            color: var(--primary);
+        }
+
+        .terminal-warn {
+            color: var(--accent);
+        }
+
         /* CLI Guide Section */
         .guide {
             padding: 100px 0;
@@ -481,6 +743,7 @@
             <div class="nav-links">
                 <a href="#features">기능</a>
                 <a href="#specs">포맷 규격</a>
+                <a href="#web-demo">웹 데모</a>
                 <a href="#guide">사용법</a>
                 <a href="https://github.com/jeiel85/minimal-zip-concept" target="_blank">GitHub</a>
             </div>
@@ -726,6 +989,123 @@
                 </div>
             </div>
         </section>
+        <!-- Web Wasm Demo Section -->
+        <section id="web-demo" class="web-demo">
+            <div class="section-header">
+                <h2 class="section-title">Wasm 대화형 웹 데모</h2>
+                <p class="section-subtitle">별도의 설치 없이 웹 브라우저에서 직접 MZC 압축 및 복원 엔진을 실행해보세요.</p>
+            </div>
+
+            <div class="demo-card">
+                <div class="demo-layout">
+                    <!-- Left: Drag and Drop + File Info -->
+                    <div>
+                        <div class="drop-zone" id="drop-zone">
+                            <div class="drop-zone-icon">📥</div>
+                            <div class="drop-zone-text">여기에 파일을 드래그 앤 드롭 하거나 클릭하세요</div>
+                            <div class="drop-zone-subtext">최대 20MB 이내의 파일을 권장합니다.</div>
+                            <input type="file" id="file-input" style="display: none;">
+                            
+                            <div class="file-info-box" id="file-info-box">
+                                <span class="file-name" id="file-name">filename.txt</span>
+                                <span class="file-size" id="file-size">0 KB</span>
+                            </div>
+                        </div>
+
+                        <div class="demo-actions">
+                            <button id="compress-btn" class="btn btn-primary" style="opacity: 0.5;" disabled>⚡ MZC로 압축하기</button>
+                            <button id="decompress-btn" class="btn btn-secondary" style="opacity: 0.5;" disabled>🔓 압축 해제하기</button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Compression Settings -->
+                    <div>
+                        <div class="options-group">
+                            <label class="options-label">압축 알고리즘 (Compression Mode)</label>
+                            <select id="mode-select" class="select-input">
+                                <option value="2" selected>Hybrid (LZ77 + RLE)</option>
+                                <option value="3">LZ77 sliding window</option>
+                                <option value="0">RLE (Run-Length Encoding)</option>
+                                <option value="1">Dictionary substitution</option>
+                            </select>
+                        </div>
+
+                        <div class="options-group">
+                            <label class="options-label">엔트로피 코더 (Entropy Mode)</label>
+                            <select id="entropy-select" class="select-input">
+                                <option value="4" selected>Context Mixing (CM + Range Coder)</option>
+                                <option value="3">tANS (Asymmetric Num System)</option>
+                                <option value="2">Dynamic Huffman</option>
+                                <option value="1">Static Huffman</option>
+                                <option value="0">None (Raw bytes)</option>
+                            </select>
+                        </div>
+
+                        <div class="options-group">
+                            <label class="options-label">압축 레벨 (Compression Level: 1-9)</label>
+                            <div class="range-slider-container">
+                                <input type="range" id="level-slider" class="range-slider" min="1" max="9" value="3">
+                                <span class="range-val" id="level-val">3</span>
+                            </div>
+                        </div>
+
+                        <div class="options-group">
+                            <label class="options-label">예측 전처리 필터 (Filters)</label>
+                            <div class="checkbox-grid">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="filter-delta" class="checkbox-input">
+                                    Delta Filter (시계열)
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="filter-bcj" class="checkbox-input">
+                                    BCJ Filter (x86 EXE)
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="filter-png" class="checkbox-input">
+                                    PNG Filter (Paeth)
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="filter-lpc" class="checkbox-input">
+                                    LPC Filter (Audio)
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Results Area -->
+                <div class="results-panel" id="results-panel">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-lbl">원본 크기</div>
+                            <div class="stat-val" id="stat-orig-size">0 B</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-lbl">처리 크기</div>
+                            <div class="stat-val" id="stat-proc-size">0 B</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-lbl">저장 공간 절약</div>
+                            <div class="stat-val ratio-saving" id="stat-ratio">0.0%</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-lbl">소요 시간</div>
+                            <div class="stat-val" id="stat-time">0 ms</div>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center; margin-bottom: 24px;">
+                        <a id="download-link" class="btn btn-primary" style="display: none; box-shadow: 0 0 20px var(--primary-glow); margin: 0 auto;" href="#" download>
+                            📥 결과 파일 다운로드
+                        </a>
+                    </div>
+
+                    <div class="terminal-box" id="terminal-box">
+                        <!-- Terminal lines here -->
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <!-- CLI Guide Section -->
         <section id="guide" class="guide">
@@ -788,6 +1168,297 @@
 
         // Initialize display for active tab
         document.getElementById("mzc7").style.display = "flex";
+
+        // --- MZC WebAssembly Interactive Demo Logic ---
+        let wasmInstance = null;
+        let wasmMemory = null;
+        let selectedFileData = null;
+        let selectedFileName = "";
+
+        const logTerminal = document.getElementById("terminal-box");
+
+        function logToTerminal(message, type = "info") {
+            const timeStr = new Date().toLocaleTimeString();
+            const line = document.createElement("div");
+            line.className = "terminal-line";
+            
+            const timeSpan = document.createElement("span");
+            timeSpan.className = "terminal-time";
+            timeSpan.textContent = `[${timeStr}]`;
+            
+            const contentSpan = document.createElement("span");
+            contentSpan.className = `terminal-${type}`;
+            contentSpan.textContent = message;
+            
+            line.appendChild(timeSpan);
+            line.appendChild(contentSpan);
+            logTerminal.appendChild(line);
+            logTerminal.scrollTop = logTerminal.scrollHeight;
+        }
+
+        async function initWasm() {
+            logToTerminal("WebAssembly 코어 라이브러리를 로드하는 중...", "info");
+            try {
+                const response = await fetch("mzc.wasm");
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const bytes = await response.arrayBuffer();
+                const { instance } = await WebAssembly.instantiate(bytes, {});
+                wasmInstance = instance;
+                wasmMemory = instance.exports.memory;
+                logToTerminal("MZC WebAssembly 엔진이 정상적으로 로드되었습니다. 준비 완료!", "success");
+            } catch (err) {
+                logToTerminal(`엔진 로드 실패: ${err.message}`, "warn");
+                console.error("Wasm initialization failed:", err);
+            }
+        }
+
+        // Memory helpers
+        function allocUint8Array(arr) {
+            const len = arr.length;
+            const ptr = wasmInstance.exports.wasm_alloc(len);
+            const memView = new Uint8Array(wasmMemory.buffer, ptr, len);
+            memView.set(arr);
+            return { ptr, len };
+        }
+
+        function freePtr(ptr, len) {
+            wasmInstance.exports.wasm_free(ptr, len);
+        }
+
+        function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc) {
+            if (!wasmInstance) return null;
+            
+            const { ptr: inPtr, len: inLen } = allocUint8Array(data);
+            const outLenPtr = wasmInstance.exports.wasm_alloc(4); // 32-bit pointer (4 bytes)
+            
+            const outPtr = wasmInstance.exports.wasm_compress(
+                inPtr,
+                inLen,
+                mode,
+                entropy,
+                level,
+                delta ? 1 : 0,
+                bcj ? 1 : 0,
+                png ? 1 : 0,
+                lpc ? 1 : 0,
+                outLenPtr
+            );
+            
+            const outLenView = new Uint32Array(wasmMemory.buffer, outLenPtr, 1);
+            const outLen = outLenView[0];
+            
+            if (outPtr === 0 || outLen === 0) {
+                freePtr(inPtr, inLen);
+                freePtr(outLenPtr, 4);
+                return null;
+            }
+            
+            const resultView = new Uint8Array(wasmMemory.buffer, outPtr, outLen);
+            const result = new Uint8Array(resultView);
+            
+            freePtr(inPtr, inLen);
+            freePtr(outLenPtr, 4);
+            freePtr(outPtr, outLen);
+            
+            return result;
+        }
+
+        function runWasmDecompress(data) {
+            if (!wasmInstance) return null;
+            
+            const { ptr: inPtr, len: inLen } = allocUint8Array(data);
+            const outLenPtr = wasmInstance.exports.wasm_alloc(4);
+            
+            const outPtr = wasmInstance.exports.wasm_decompress(
+                inPtr,
+                inLen,
+                outLenPtr
+            );
+            
+            const outLenView = new Uint32Array(wasmMemory.buffer, outLenPtr, 1);
+            const outLen = outLenView[0];
+            
+            if (outPtr === 0 || outLen === 0) {
+                freePtr(inPtr, inLen);
+                freePtr(outLenPtr, 4);
+                return null;
+            }
+            
+            const resultView = new Uint8Array(wasmMemory.buffer, outPtr, outLen);
+            const result = new Uint8Array(resultView);
+            
+            freePtr(inPtr, inLen);
+            freePtr(outLenPtr, 4);
+            freePtr(outPtr, outLen);
+            
+            return result;
+        }
+
+        // Event listeners
+        const dropZone = document.getElementById("drop-zone");
+        const fileInput = document.getElementById("file-input");
+        const fileInfoBox = document.getElementById("file-info-box");
+        const fileNameEl = document.getElementById("file-name");
+        const fileSizeEl = document.getElementById("file-size");
+        const compressBtn = document.getElementById("compress-btn");
+        const decompressBtn = document.getElementById("decompress-btn");
+        const resultsPanel = document.getElementById("results-panel");
+        const downloadLink = document.getElementById("download-link");
+
+        const levelSlider = document.getElementById("level-slider");
+        const levelVal = document.getElementById("level-val");
+
+        levelSlider.addEventListener("input", (e) => {
+            levelVal.textContent = e.target.value;
+        });
+
+        // Drop zone interaction
+        dropZone.addEventListener("click", () => fileInput.click());
+
+        dropZone.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            dropZone.classList.add("dragover");
+        });
+
+        ["dragleave", "dragend"].forEach(type => {
+            dropZone.addEventListener(type, () => {
+                dropZone.classList.remove("dragover");
+            });
+        });
+
+        dropZone.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropZone.classList.remove("dragover");
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener("change", (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function handleFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                selectedFileData = new Uint8Array(e.target.result);
+                selectedFileName = file.name;
+                
+                fileNameEl.textContent = file.name;
+                fileSizeEl.textContent = formatBytes(file.size);
+                fileInfoBox.style.display = "flex";
+                
+                compressBtn.removeAttribute("disabled");
+                compressBtn.style.opacity = "1";
+                decompressBtn.removeAttribute("disabled");
+                decompressBtn.style.opacity = "1";
+                
+                logToTerminal(`파일 선택됨: ${file.name} (${formatBytes(file.size)})`, "info");
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        compressBtn.addEventListener("click", () => {
+            if (!selectedFileData || !wasmInstance) return;
+            
+            const mode = parseInt(document.getElementById("mode-select").value);
+            const entropy = parseInt(document.getElementById("entropy-select").value);
+            const level = parseInt(levelSlider.value);
+            const delta = document.getElementById("filter-delta").checked;
+            const bcj = document.getElementById("filter-bcj").checked;
+            const png = document.getElementById("filter-png").checked;
+            const lpc = document.getElementById("filter-lpc").checked;
+            
+            logToTerminal(`압축 시작: ${selectedFileName} (Mode=${mode}, Entropy=${entropy}, Level=${level}, Filters: D=${delta}, B=${bcj}, P=${png}, L=${lpc})`, "info");
+            
+            const startTime = performance.now();
+            const compressed = runWasmCompress(selectedFileData, mode, entropy, level, delta, bcj, png, lpc);
+            const elapsed = performance.now() - startTime;
+            
+            if (!compressed) {
+                logToTerminal("압축 실패: 유효하지 않은 데이터를 반환했습니다.", "warn");
+                return;
+            }
+            
+            const origSize = selectedFileData.length;
+            const compSize = compressed.length;
+            const ratio = ((origSize - compSize) / origSize * 100).toFixed(2);
+            
+            logToTerminal(`압축 성공! 소요 시간: ${elapsed.toFixed(1)}ms. 크기: ${formatBytes(origSize)} -> ${formatBytes(compSize)} (${ratio}%)`, "success");
+            
+            // Set UI stats
+            document.getElementById("stat-orig-size").textContent = formatBytes(origSize);
+            document.getElementById("stat-proc-size").textContent = formatBytes(compSize);
+            
+            const ratioEl = document.getElementById("stat-ratio");
+            ratioEl.textContent = `${ratio}%`;
+            ratioEl.className = ratio >= 0 ? "stat-val ratio-saving" : "stat-val ratio-expansion";
+            
+            document.getElementById("stat-time").textContent = `${elapsed.toFixed(1)} ms`;
+            
+            // Create download link
+            const blob = new Blob([compressed], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            downloadLink.href = url;
+            downloadLink.download = selectedFileName.endsWith(".mzc") ? selectedFileName : selectedFileName + ".mzc";
+            downloadLink.style.display = "inline-flex";
+            
+            resultsPanel.style.display = "block";
+        });
+
+        decompressBtn.addEventListener("click", () => {
+            if (!selectedFileData || !wasmInstance) return;
+            
+            logToTerminal(`압축 해제 시작: ${selectedFileName}...`, "info");
+            
+            const startTime = performance.now();
+            const decompressed = runWasmDecompress(selectedFileData);
+            const elapsed = performance.now() - startTime;
+            
+            if (!decompressed) {
+                logToTerminal("압축 해제 실패: 올바른 MZC 압축 파일이 아니거나 복원 중 오류가 발생했습니다.", "warn");
+                return;
+            }
+            
+            const origSize = selectedFileData.length;
+            const decompSize = decompressed.length;
+            
+            logToTerminal(`압축 해제 성공! 소요 시간: ${elapsed.toFixed(1)}ms. 복원된 크기: ${formatBytes(decompSize)}`, "success");
+            
+            // Set UI stats
+            document.getElementById("stat-orig-size").textContent = formatBytes(origSize);
+            document.getElementById("stat-proc-size").textContent = formatBytes(decompSize);
+            
+            const ratioEl = document.getElementById("stat-ratio");
+            ratioEl.textContent = "N/A";
+            ratioEl.className = "stat-val";
+            
+            document.getElementById("stat-time").textContent = `${elapsed.toFixed(1)} ms`;
+            
+            // Create download link
+            const blob = new Blob([decompressed], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            downloadLink.href = url;
+            downloadLink.download = selectedFileName.endsWith(".mzc") ? selectedFileName.slice(0, -4) : "restored_" + selectedFileName;
+            downloadLink.style.display = "inline-flex";
+            
+            resultsPanel.style.display = "block";
+        });
+
+        // Start initialization
+        initWasm();
     </script>
 </body>
 </html>

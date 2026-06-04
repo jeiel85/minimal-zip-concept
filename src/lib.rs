@@ -11,6 +11,7 @@
 
 // ─── 공개 모듈: CLI 및 사용자 인터페이스 ───
 pub mod cli;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gui;
 
 // ─── 공개 모듈: 핵심 데이터 구조 ───
@@ -38,6 +39,10 @@ pub mod inspect;
 // ─── 공개 모듈: 아카이브 컨테이너 ───
 pub mod archive;
 
+// ─── WebAssembly 바인딩 모듈 ───
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
 // [Rust 경로 수입 설명]
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
 use error::MzcError;
@@ -57,7 +62,22 @@ use cli::{CompressionMode, EntropyMode};
 // [Rust 병렬성 확장 설명]
 // - rayon::prelude::*: Rayon은 Rust에서 CPU 멀티코어 병렬 처리를 아주 쉽게 할 수 있도록 돕는 대표적인 라이브러리입니다.
 // - `*` 기호를 써서 병렬 반복자(Parallel Iterator) 기능들을 일괄 로드합니다.
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+pub trait WasmParallelIteratorShim<'a, T: ?Sized + 'a> {
+    type Iter: Iterator<Item = &'a T>;
+    fn par_iter(&'a self) -> Self::Iter;
+}
+
+#[cfg(target_arch = "wasm32")]
+impl<'a, T: 'a> WasmParallelIteratorShim<'a, T> for [T] {
+    type Iter = std::slice::Iter<'a, T>;
+    fn par_iter(&'a self) -> Self::Iter {
+        self.iter()
+    }
+}
 
 // [Rust 기초 설명]
 // - 숫자 표기 방식: `1_024_000`처럼 숫자 사이에 밑줄(_)을 넣으면 가독성이 향상됩니다. 컴파일러는 이를 일반 숫자 1024000과 동일하게 취급합니다.
@@ -542,11 +562,23 @@ where
     let progress_counter = std::sync::atomic::AtomicUsize::new(0);
     let on_chunk_progress_clone = on_chunk_progress.clone();
 
-    // C. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩 (par_iter + map)
+    // D. 복원 완료 데이터 저장용 메모리 1회 선행 할당 및 쓰기 버퍼 설정
+    let mut restored_bytes = vec![0u8; header.original_size as usize];
+    let restored_ptr = restored_bytes.as_mut_ptr() as usize;
+
+    let mut chunk_offsets = Vec::with_capacity(chunk_count);
+    let mut current_offset = 0;
+    for &(_, chunk_orig_size, _) in &chunk_slices {
+        chunk_offsets.push(current_offset);
+        current_offset += chunk_orig_size;
+    }
+
+    // C. Rayon 멀티스레드로 각 청크를 동시 병렬 디코딩 (par_iter + zip) 후 선할당 메모리에 직접 쓰기
     let global_dict_ref = global_dict.as_ref();
-    let decompressed_chunks: Result<Vec<Vec<u8>>, MzcError> = chunk_slices
+    let decomp_res: Result<(), MzcError> = chunk_slices
         .par_iter()
-        .map(|&(chunk_data, chunk_orig_size, chunk_comb_size)| {
+        .zip(chunk_offsets.par_iter())
+        .try_for_each(|(&(chunk_data, chunk_orig_size, chunk_comb_size), &offset)| {
             // 엔트로피 타입 복원 감지 분기
             let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
                 let entropy_bits = (header.algorithm_type >> 2) & 0x07;
@@ -587,9 +619,13 @@ where
             };
 
             if unhuffman.len() < 2 && header.dictionary_size == 0 {
+                unsafe {
+                    let dest_slice = std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size);
+                    dest_slice.copy_from_slice(&unhuffman);
+                }
                 let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 on_chunk_progress_clone(current, chunk_count);
-                return Ok(unhuffman);
+                return Ok(());
             }
 
             // 로컬 사전 및 RLE 페이로드 분리
@@ -679,19 +715,18 @@ where
                 });
             }
 
+            // 안전한 DISJOINT 쓰기 복사
+            unsafe {
+                let dest_slice = std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size);
+                dest_slice.copy_from_slice(&decompressed_chunk);
+            }
+
             let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             on_chunk_progress_clone(current, chunk_count);
-            Ok(decompressed_chunk)
-        })
-        .collect();
+            Ok(())
+        });
 
-    let decompressed_chunks = decompressed_chunks?;
-
-    // D. 복원 완료된 전체 청크 데이터 병합
-    let mut restored_bytes = Vec::with_capacity(header.original_size as usize);
-    for chunk in decompressed_chunks {
-        restored_bytes.extend_from_slice(&chunk);
-    }
+    decomp_res?;
 
     // E. 최종 체크섬 및 원래 크기 재차 검증
     if restored_bytes.len() as u64 != header.original_size {

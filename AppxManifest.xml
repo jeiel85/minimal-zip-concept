@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 desktop desktop5 rescap">
+
+  <Identity
+    Name="MinimalZipConcept.Mzc"
+    Publisher="CN=Antigravity"
+    Version="0.10.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Minimal Zip Concept (MZC)</DisplayName>
+    <PublisherDisplayName>Antigravity</PublisherDisplayName>
+    <Logo>assets\mzc_app_icon.png</Logo>
+  </Properties>
+
+  <Resources>
+    <Resource Language="en-US" />
+    <Resource Language="ko-KR" />
+  </Resources>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22000.0" />
+  </Dependencies>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources"/>
+  </Capabilities>
+
+  <Applications>
+    <Application Id="MzcApp" Executable="mzc.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="MZC Archiver"
+        Description="Minimal Zip Concept - High-performance lossless compressor and archiver"
+        BackgroundColor="#0c0d10"
+        Square150x150Logo="assets\mzc_app_icon.png"
+        Square44x44Logo="assets\mzc_app_icon.png">
+        <uap:DefaultTile Wide310x150Logo="assets\mzc_app_icon.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- File Type Association for .mzc -->
+        <uap3:Extension Category="windows.fileTypeAssociation">
+          <uap3:FileTypeAssociation Name="mzc">
+            <uap:SupportedFileTypes>
+              <uap:FileType>.mzc</uap:FileType>
+            </uap:SupportedFileTypes>
+            <uap2:SupportedVerbs xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2">
+              <uap2:Verb Id="open" Parameters="decompress &quot;%1&quot;">Open</uap2:Verb>
+            </uap2:SupportedVerbs>
+          </uap3:FileTypeAssociation>
+        </uap3:Extension>
+
+        <!-- Windows 11 Modern Context Menu (desktop5) -->
+        <desktop5:Extension Category="windows.contextMenu">
+          <desktop5:ContextMenu>
+            <desktop5:Verb Id="CompressWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="*">
+              <desktop5:VerbDisplayName>MZC로 압축하기 (Compress with MZC)</desktop5:VerbDisplayName>
+            </desktop5:Verb>
+            <desktop5:Verb Id="CompressFolderWithMzc" Attributes="0" CommandParameter="compress &quot;%1&quot; &quot;%1.mzc&quot;" Context="Folder">
+              <desktop5:VerbDisplayName>MZC로 폴더 압축하기 (Compress folder with MZC)</desktop5:VerbDisplayName>
+            </desktop5:Verb>
+            <desktop5:Verb Id="DecompressWithMzc" Attributes="0" CommandParameter="decompress &quot;%1&quot;" Context=".mzc">
+              <desktop5:VerbDisplayName>MZC로 압축 해제하기 (Decompress with MZC)</desktop5:VerbDisplayName>
+            </desktop5:Verb>
+          </desktop5:ContextMenu>
+        </desktop5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+</Package>
