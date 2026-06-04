@@ -14,7 +14,6 @@ exclude = [
     "docs/**",
     "prompts/**",
     "samples/**",
-    "installer/**",
     "AppxManifest.xml",
     ".github/**"
 ]
