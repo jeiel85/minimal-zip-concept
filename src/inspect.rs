@@ -1,20 +1,23 @@
-use std::path::Path;
-use anyhow::{Context, Result};
-use crate::format::{MzcHeader, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3, ALGORITHM_RLE, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77};
-use crate::checksum::{calculate_sha256, bytes_to_hex};
+use crate::checksum::{bytes_to_hex, calculate_sha256};
 use crate::decompress_bytes_v2;
-use crate::rle::Dictionary;
+use crate::format::{
+    MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, HEADER_SIZE_MZC1,
+    HEADER_SIZE_MZC2, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3,
+};
 use crate::huffman::huffman_decompress;
+use crate::rle::Dictionary;
+use anyhow::{Context, Result};
+use std::path::Path;
 
 /// MZC 압축 파일을 분석하여 포맷 버전, 헤더 상세, 압축 모드, 실측 압축 통계, SHA-256 무결성 검증 결과를
 /// 출력하며, 페이로드 내부의 물리적 블록 배치율을 ANSI 터미널 그래픽 맵으로 시각화 드로잉해 줍니다.
 pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
     let path = file_path.as_ref();
-    
+
     // 1. 파일 바이트 로드
     let file_bytes = std::fs::read(path)
         .with_context(|| format!("MZC 파일 '{:?}'을 읽을 수 없습니다.", path))?;
-    
+
     if file_bytes.len() < 4 {
         anyhow::bail!("파일 크기가 너무 작아 MZC 파일 형식을 분석할 수 없습니다.");
     }
@@ -105,11 +108,17 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
         let mut pos = 0;
         let n = payload_bytes.len();
         while pos < n {
-            if pos + 12 > n { break; }
-            let comb_size = u32::from_le_bytes(payload_bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
-            let comp_size = u32::from_le_bytes(payload_bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
+            if pos + 12 > n {
+                break;
+            }
+            let comb_size =
+                u32::from_le_bytes(payload_bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+            let comp_size =
+                u32::from_le_bytes(payload_bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
             pos += 12;
-            if pos + comp_size > n { break; }
+            if pos + comp_size > n {
+                break;
+            }
 
             let chunk_data = &payload_bytes[pos..pos + comp_size];
             pos += comp_size;
@@ -124,16 +133,22 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
             // 사전 복구
             let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
             let dict_bytes_len = dict.to_bytes().len();
-            if dict_bytes_len >= unhuff.len() { continue; }
+            if dict_bytes_len >= unhuff.len() {
+                continue;
+            }
             let rle_payload = &unhuff[dict_bytes_len..];
 
             // 블록 해독 및 가상 수집
             let mut b_pos = 0;
             let b_n = rle_payload.len();
             while b_pos < b_n {
-                if b_pos + 3 > b_n { break; }
+                if b_pos + 3 > b_n {
+                    break;
+                }
                 let b_type = rle_payload[b_pos];
-                let b_len = u16::from_le_bytes(rle_payload[b_pos + 1..b_pos + 3].try_into().unwrap()) as usize;
+                let b_len =
+                    u16::from_le_bytes(rle_payload[b_pos + 1..b_pos + 3].try_into().unwrap())
+                        as usize;
                 b_pos += 3;
 
                 match b_type {
@@ -165,9 +180,12 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
         let mut b_pos = 0;
         let b_n = payload_bytes.len();
         while b_pos < b_n {
-            if b_pos + 3 > b_n { break; }
+            if b_pos + 3 > b_n {
+                break;
+            }
             let b_type = payload_bytes[b_pos];
-            let b_len = u16::from_le_bytes(payload_bytes[b_pos + 1..b_pos + 3].try_into().unwrap()) as usize;
+            let b_len = u16::from_le_bytes(payload_bytes[b_pos + 1..b_pos + 3].try_into().unwrap())
+                as usize;
             b_pos += 3;
 
             match b_type {
@@ -194,7 +212,7 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
         println!(" - B (BackRef, 노란색): LZ77 슬라이딩 윈도우 백레퍼런스");
         println!(" - L (Literal, 회색): 비압축 원본 바이트");
         println!(" -------------------------------------------------------------");
-        
+
         let cols = 30; // 가로 출력 글자수 조절
         print!("  ");
         for (idx, &ch) in visual_blocks.iter().enumerate() {
@@ -210,7 +228,7 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
             }
         }
         println!("\n -------------------------------------------------------------");
-        
+
         let total_blocks = literal_blocks + run_blocks + token_blocks + backref_blocks;
         println!(
             " * 통계: Total Blocks: {}, Literal: {} ({:.1}%), Run: {} ({:.1}%), Token: {} ({:.1}%), BackRef: {} ({:.1}%)",

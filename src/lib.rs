@@ -15,24 +15,24 @@ pub mod cli;
 pub mod gui;
 
 // ─── 공개 모듈: 핵심 데이터 구조 ───
+pub mod checksum;
 pub mod error;
 pub mod format;
 pub mod rle;
-pub mod checksum;
 
 // ─── 내부 구현 모듈 (외부 API 문서에서 숨김 처리) ───
 // 아래 모듈들은 라이브러리 내부 구현 세부사항이며, 안정적 공개 API가 아닙니다.
 // 향후 pub(crate)로 전환 예정이므로 외부 의존을 피해 주세요.
 #[doc(hidden)]
-pub mod huffman;
-#[doc(hidden)]
 pub mod ans;
 #[doc(hidden)]
 pub mod cm;
 #[doc(hidden)]
+pub mod deflate;
+#[doc(hidden)]
 pub mod filters;
 #[doc(hidden)]
-pub mod deflate;
+pub mod huffman;
 #[doc(hidden)]
 pub mod inspect;
 
@@ -45,19 +45,18 @@ pub mod wasm;
 
 // [Rust 경로 수입 설명]
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
+use checksum::{bytes_to_hex, calculate_sha256};
+use cli::{CompressionMode, EntropyMode};
 use error::MzcError;
 use format::{
-    MzcHeader, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2, ALGORITHM_RLE, ALGORITHM_DICT,
-    ALGORITHM_HYBRID, ALGORITHM_LZ77, VERSION_MZC1, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
-    VERSION_MZC7, FILTER_DELTA, FILTER_BCJ, FILTER_DYNAMIC_HUFFMAN, FILTER_ANS,
+    MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
+    FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
+    VERSION_MZC1, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6, VERSION_MZC7,
 };
-use rle::{
-    Dictionary, build_dictionary, rle_decompress_hybrid,
-    rle_decompress_hybrid_mzc5,
+use huffman::{
+    huffman_compress, huffman_compress_dynamic, huffman_decompress, huffman_decompress_dynamic,
 };
-use checksum::{calculate_sha256, bytes_to_hex};
-use huffman::{huffman_compress, huffman_decompress, huffman_compress_dynamic, huffman_decompress_dynamic};
-use cli::{CompressionMode, EntropyMode};
+use rle::{build_dictionary, rle_decompress_hybrid, rle_decompress_hybrid_mzc5, Dictionary};
 
 // [Rust 병렬성 확장 설명]
 // - rayon::prelude::*: Rayon은 Rust에서 CPU 멀티코어 병렬 처리를 아주 쉽게 할 수 있도록 돕는 대표적인 라이브러리입니다.
@@ -80,7 +79,6 @@ impl<'a, T: 'a> WasmParallelIteratorShim<'a, T> for [T] {
 }
 /// SIMD 가속 활성화 여부를 제어하는 전역 원자적 플래그입니다.
 pub static ENABLE_SIMD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
 
 // [Rust 기초 설명]
 // - 숫자 표기 방식: `1_024_000`처럼 숫자 사이에 밑줄(_)을 넣으면 가독성이 향상됩니다. 컴파일러는 이를 일반 숫자 1024000과 동일하게 취급합니다.
@@ -140,7 +138,18 @@ pub fn compress_bytes_v2_dict(
     lpc: bool,
     dict_data: Option<&[u8]>,
 ) -> Vec<u8> {
-    compress_bytes_v2_with_progress_dict(original, mode, entropy, level, delta, bcj, png, lpc, dict_data, |_, _, _, _| {})
+    compress_bytes_v2_with_progress_dict(
+        original,
+        mode,
+        entropy,
+        level,
+        delta,
+        bcj,
+        png,
+        lpc,
+        dict_data,
+        |_, _, _, _| {},
+    )
 }
 
 /// **GUI 또는 기타 통계를 위한 실시간 청크 압축 모니터링 기능이 보강된 압축 엔트리포인트입니다.**
@@ -158,7 +167,18 @@ pub fn compress_bytes_v2_with_progress<F>(
 where
     F: Fn(usize, usize, usize, f64) + Send + Sync + Clone,
 {
-    compress_bytes_v2_with_progress_dict(original, mode, entropy, level, delta, bcj, png, lpc, None, on_chunk_progress)
+    compress_bytes_v2_with_progress_dict(
+        original,
+        mode,
+        entropy,
+        level,
+        delta,
+        bcj,
+        png,
+        lpc,
+        None,
+        on_chunk_progress,
+    )
 }
 
 /// **GUI/통계 모니터링 및 전역 사전을 동시 지원하는 코어 압축 파이프라인 (MZC7 대응)**
@@ -189,11 +209,13 @@ where
         let sha256 = calculate_sha256(original);
         // 빈 헤더를 생성하여 즉시 반환합니다.
         let header = MzcHeader::new_v6(
-            ALGORITHM_HYBRID | (if delta { FILTER_DELTA } else { 0 }) | (if bcj { FILTER_BCJ } else { 0 }),
+            ALGORITHM_HYBRID
+                | (if delta { FILTER_DELTA } else { 0 })
+                | (if bcj { FILTER_BCJ } else { 0 }),
             0,
             0,
             0,
-            sha256
+            sha256,
         );
         return header.to_bytes();
     }
@@ -208,7 +230,10 @@ where
         None
     };
 
-    let global_dict_bytes = global_dict.as_ref().map(|d| d.to_bytes()).unwrap_or_default();
+    let global_dict_bytes = global_dict
+        .as_ref()
+        .map(|d| d.to_bytes())
+        .unwrap_or_default();
     let dictionary_size = global_dict_bytes.len() as u16;
 
     // 1. 원본 데이터를 1MB 청크 단위 슬라이스들로 분할
@@ -298,7 +323,11 @@ where
             let chunk_comb_size = combined.len() as u32;
 
             if entropy == EntropyMode::Cm {
-                println!("compress_bytes_v2_with_progress_dict: combined len = {}, first 15 = {:?}", combined.len(), &combined[..std::cmp::min(15, combined.len())]);
+                println!(
+                    "compress_bytes_v2_with_progress_dict: combined len = {}, first 15 = {:?}",
+                    combined.len(),
+                    &combined[..std::cmp::min(15, combined.len())]
+                );
             }
 
             // E. 엔트로피 코딩 추가 압축 적용
@@ -312,9 +341,19 @@ where
             } else if entropy == EntropyMode::Cm {
                 let res = cm::cm_compress(&combined);
                 if let Ok(ref comp) = res {
-                    println!("compress_bytes_v2_with_progress_dict: CM input len = {}, output len = {}", combined.len(), comp.len());
-                    println!("compress_bytes_v2_with_progress_dict: CM input 15 = {:?}", &combined[..std::cmp::min(15, combined.len())]);
-                    println!("compress_bytes_v2_with_progress_dict: CM output 15 = {:?}", &comp[..std::cmp::min(15, comp.len())]);
+                    println!(
+                        "compress_bytes_v2_with_progress_dict: CM input len = {}, output len = {}",
+                        combined.len(),
+                        comp.len()
+                    );
+                    println!(
+                        "compress_bytes_v2_with_progress_dict: CM input 15 = {:?}",
+                        &combined[..std::cmp::min(15, combined.len())]
+                    );
+                    println!(
+                        "compress_bytes_v2_with_progress_dict: CM output 15 = {:?}",
+                        &comp[..std::cmp::min(15, comp.len())]
+                    );
                 }
                 res?
             } else {
@@ -325,7 +364,12 @@ where
 
             // 실시간 진행 상황 콜백 발동
             let duration_secs = start_time.elapsed().as_secs_f64();
-            on_chunk_progress(chunk_idx, chunk_orig_size as usize, chunk_comp_size as usize, duration_secs);
+            on_chunk_progress(
+                chunk_idx,
+                chunk_orig_size as usize,
+                chunk_comp_size as usize,
+                duration_secs,
+            );
 
             // F. 청크 개별 바이너리 생성: [Original u32] [Combined u32] [Compressed u32] + 페이로드
             let mut chunk_bin = Vec::with_capacity(CHUNK_HEADER_SIZE + final_payload.len());
@@ -395,8 +439,16 @@ where
         core_alg
             | (if delta { FILTER_DELTA } else { 0 })
             | (if bcj { FILTER_BCJ } else { 0 })
-            | (if entropy == EntropyMode::Dynamic { FILTER_DYNAMIC_HUFFMAN } else { 0 })
-            | (if entropy == EntropyMode::Ans { FILTER_ANS } else { 0 })
+            | (if entropy == EntropyMode::Dynamic {
+                FILTER_DYNAMIC_HUFFMAN
+            } else {
+                0
+            })
+            | (if entropy == EntropyMode::Ans {
+                FILTER_ANS
+            } else {
+                0
+            })
     };
 
     let is_v6 = dictionary_size > 0 || entropy == EntropyMode::Ans;
@@ -465,7 +517,10 @@ pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
 
 /// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
 /// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
-pub fn decompress_bytes_v2_dict(mzc_bytes: &[u8], dict_data: Option<&[u8]>) -> Result<Vec<u8>, MzcError> {
+pub fn decompress_bytes_v2_dict(
+    mzc_bytes: &[u8],
+    dict_data: Option<&[u8]>,
+) -> Result<Vec<u8>, MzcError> {
     decompress_bytes_v2_with_progress_dict(mzc_bytes, dict_data, |_, _| {})
 }
 
@@ -479,7 +534,9 @@ where
     F: Fn(usize, usize) + Send + Sync + Clone,
 {
     if mzc_bytes.len() < 4 {
-        return Err(MzcError::TruncatedHeader { read_bytes: mzc_bytes.len() });
+        return Err(MzcError::TruncatedHeader {
+            read_bytes: mzc_bytes.len(),
+        });
     }
 
     // 1. 헤더 복구
@@ -495,7 +552,7 @@ where
             });
         }
         let decompressed = rle::rle_decompress(payload)?;
-        
+
         // 크기 및 체크섬 매칭 검증
         if decompressed.len() as u64 != header.original_size {
             return Err(MzcError::OriginalSizeMismatch {
@@ -558,7 +615,7 @@ where
         let orig_size_bytes: [u8; 4] = payload_area[pos..pos + 4].try_into().unwrap();
         let comb_size_bytes: [u8; 4] = payload_area[pos + 4..pos + 8].try_into().unwrap();
         let comp_size_bytes: [u8; 4] = payload_area[pos + 8..pos + 12].try_into().unwrap();
-        
+
         let chunk_orig_size = u32::from_le_bytes(orig_size_bytes) as usize;
         let chunk_comb_size = u32::from_le_bytes(comb_size_bytes) as usize;
         let chunk_comp_size = u32::from_le_bytes(comp_size_bytes) as usize;
@@ -804,12 +861,16 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
     lpc: bool,
     dict_data: Option<&[u8]>,
 ) -> Result<(), MzcError> {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let is_v7 = entropy == EntropyMode::Cm || png || lpc;
     // 1. 임시 헤더 영역 (56바이트) 예약 생성
-    let header_pos = writer.stream_position().map_err(|e| MzcError::IoError(e.to_string()))?;
+    let header_pos = writer
+        .stream_position()
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
     let placeholder = vec![0u8; HEADER_SIZE_MZC2];
-    writer.write_all(&placeholder).map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer
+        .write_all(&placeholder)
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
 
     // 2. 전체 SHA-256 및 사전 로드
     let mut hasher = Sha256::new();
@@ -822,10 +883,15 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
         None
     };
 
-    let global_dict_bytes = global_dict.as_ref().map(|d| d.to_bytes()).unwrap_or_default();
+    let global_dict_bytes = global_dict
+        .as_ref()
+        .map(|d| d.to_bytes())
+        .unwrap_or_default();
     let dictionary_size = global_dict_bytes.len() as u16;
     if dictionary_size > 0 {
-        writer.write_all(&global_dict_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&global_dict_bytes)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
     }
 
     // 3. 링 버퍼 대신 1MB 재사용 청크 버퍼를 통한 순차 청크 스트리밍 처리
@@ -926,10 +992,18 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
         let chunk_comp_size = final_payload.len() as u32;
 
         // F. 개별 청크 출력 쓰기: [Original Size] [Combined Size] [Compressed Size] + 압축 데이터
-        writer.write_all(&chunk_orig_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
-        writer.write_all(&chunk_comb_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
-        writer.write_all(&chunk_comp_size.to_le_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
-        writer.write_all(&final_payload).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&chunk_orig_size.to_le_bytes())
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&chunk_comb_size.to_le_bytes())
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&chunk_comp_size.to_le_bytes())
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&final_payload)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
 
         total_payload_size += (CHUNK_HEADER_SIZE + final_payload.len()) as u64;
     }
@@ -974,23 +1048,51 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
             CompressionMode::Hybrid => ALGORITHM_HYBRID,
             CompressionMode::Lz77 => ALGORITHM_LZ77,
         };
-        if delta { flag |= FILTER_DELTA; }
-        if bcj { flag |= FILTER_BCJ; }
-        if entropy == EntropyMode::Dynamic { flag |= FILTER_DYNAMIC_HUFFMAN; }
-        if entropy == EntropyMode::Ans { flag |= FILTER_ANS; }
+        if delta {
+            flag |= FILTER_DELTA;
+        }
+        if bcj {
+            flag |= FILTER_BCJ;
+        }
+        if entropy == EntropyMode::Dynamic {
+            flag |= FILTER_DYNAMIC_HUFFMAN;
+        }
+        if entropy == EntropyMode::Ans {
+            flag |= FILTER_ANS;
+        }
         flag
     };
 
     let header = if is_v7 {
-        MzcHeader::new_v7(algorithm_type_flag, total_orig_size, total_payload_size, dictionary_size, sha256_array)
+        MzcHeader::new_v7(
+            algorithm_type_flag,
+            total_orig_size,
+            total_payload_size,
+            dictionary_size,
+            sha256_array,
+        )
     } else {
-        MzcHeader::new_v6(algorithm_type_flag, total_orig_size, total_payload_size, dictionary_size, sha256_array)
+        MzcHeader::new_v6(
+            algorithm_type_flag,
+            total_orig_size,
+            total_payload_size,
+            dictionary_size,
+            sha256_array,
+        )
     };
 
-    let end_pos = writer.stream_position().map_err(|e| MzcError::IoError(e.to_string()))?;
-    writer.seek(std::io::SeekFrom::Start(header_pos)).map_err(|e| MzcError::IoError(e.to_string()))?;
-    writer.write_all(&header.to_bytes()).map_err(|e| MzcError::IoError(e.to_string()))?;
-    writer.seek(std::io::SeekFrom::Start(end_pos)).map_err(|e| MzcError::IoError(e.to_string()))?;
+    let end_pos = writer
+        .stream_position()
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer
+        .seek(std::io::SeekFrom::Start(header_pos))
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer
+        .write_all(&header.to_bytes())
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
+    writer
+        .seek(std::io::SeekFrom::Start(end_pos))
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
 
     Ok(())
 }
@@ -1007,7 +1109,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
 
     // 1. 헤더 영역 읽기
     let mut header_bytes = [0u8; HEADER_SIZE_MZC2];
-    reader.read_exact(&mut header_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+    reader
+        .read_exact(&mut header_bytes)
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
     let header = MzcHeader::from_bytes(&header_bytes)?;
 
     // 2. 전역 사전 읽기
@@ -1015,7 +1119,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         Some(Dictionary::from_bytes(bytes)?)
     } else if header.dictionary_size > 0 {
         let mut dict_bytes = vec![0u8; header.dictionary_size as usize];
-        reader.read_exact(&mut dict_bytes).map_err(|e| MzcError::IoError(e.to_string()))?;
+        reader
+            .read_exact(&mut dict_bytes)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
         Some(Dictionary::from_bytes(&dict_bytes)?)
     } else {
         None
@@ -1029,7 +1135,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
     while total_bytes_read < header.payload_size {
         // 청크 헤더 (12바이트) 로드
         let mut chunk_header = [0u8; CHUNK_HEADER_SIZE];
-        reader.read_exact(&mut chunk_header).map_err(|e| MzcError::IoError(e.to_string()))?;
+        reader
+            .read_exact(&mut chunk_header)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
         total_bytes_read += CHUNK_HEADER_SIZE as u64;
 
         let chunk_orig_size = u32::from_le_bytes(chunk_header[0..4].try_into().unwrap()) as usize;
@@ -1051,7 +1159,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
 
         // 압축 데이터 페이로드 로드
         let mut chunk_data = vec![0u8; chunk_comp_size];
-        reader.read_exact(&mut chunk_data).map_err(|e| MzcError::IoError(e.to_string()))?;
+        reader
+            .read_exact(&mut chunk_data)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
         total_bytes_read += chunk_comp_size as u64;
 
         // 엔트로피 모드 역추론
@@ -1065,8 +1175,16 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
             )
         } else {
             (
-                header.version < VERSION_MZC7 && chunk_data.len() != chunk_comb_size && (header.version != VERSION_MZC4 && (header.version < VERSION_MZC5 || (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) == 0) && (header.version < VERSION_MZC6 || (header.algorithm_type & FILTER_ANS) == 0)),
-                header.version == VERSION_MZC4 || (header.version >= VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0),
+                header.version < VERSION_MZC7
+                    && chunk_data.len() != chunk_comb_size
+                    && (header.version != VERSION_MZC4
+                        && (header.version < VERSION_MZC5
+                            || (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) == 0)
+                        && (header.version < VERSION_MZC6
+                            || (header.algorithm_type & FILTER_ANS) == 0)),
+                header.version == VERSION_MZC4
+                    || (header.version >= VERSION_MZC5
+                        && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0),
                 header.version >= VERSION_MZC6 && (header.algorithm_type & FILTER_ANS) != 0,
                 false,
             )
@@ -1115,7 +1233,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
             }
         } else {
             let mut alg = header.algorithm_type & 0x0F;
-            if alg == 0 { alg = ALGORITHM_HYBRID; }
+            if alg == 0 {
+                alg = ALGORITHM_HYBRID;
+            }
             alg
         };
 
@@ -1137,10 +1257,18 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         if is_v7 {
             let filter_bits = (header.algorithm_type >> 5) & 0x07;
             match filter_bits {
-                1 => { rle::inverse_delta_filter(&mut decompressed_chunk); }
-                2 => { rle::inverse_bcj_filter(&mut decompressed_chunk); }
-                3 => { filters::inverse_png_filter(&mut decompressed_chunk); }
-                4 => { filters::inverse_lpc_filter(&mut decompressed_chunk); }
+                1 => {
+                    rle::inverse_delta_filter(&mut decompressed_chunk);
+                }
+                2 => {
+                    rle::inverse_bcj_filter(&mut decompressed_chunk);
+                }
+                3 => {
+                    filters::inverse_png_filter(&mut decompressed_chunk);
+                }
+                4 => {
+                    filters::inverse_lpc_filter(&mut decompressed_chunk);
+                }
                 5 => {
                     rle::inverse_delta_filter(&mut decompressed_chunk);
                     rle::inverse_bcj_filter(&mut decompressed_chunk);
@@ -1170,7 +1298,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         }
 
         // 최종 디코딩 결과 쓰기 및 해시 누적
-        writer.write_all(&decompressed_chunk).map_err(|e| MzcError::IoError(e.to_string()))?;
+        writer
+            .write_all(&decompressed_chunk)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
         hasher.update(&decompressed_chunk);
         total_orig_size += chunk_orig_size as u64;
     }
@@ -1200,28 +1330,67 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
 #[cfg(target_os = "windows")]
 pub fn register_context_menu() -> anyhow::Result<()> {
     use anyhow::Context;
-    let exe_path = std::env::current_exe()
-        .context("현재 실행 파일 경로를 가져올 수 없습니다.")?;
+    let exe_path = std::env::current_exe().context("현재 실행 파일 경로를 가져올 수 없습니다.")?;
     let exe_str = exe_path.to_string_lossy();
-    
+
     // 1. 파일 우클릭 시 "MZC로 압축하기" 추가
-    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress", "", "MZC로 압축하기")?;
-    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress", "Icon", &exe_str)?;
-    run_reg_add(r"HKCU\Software\Classes\*\shell\MzcCompress\command", "", &format!("\"{}\" compress \"%1\"", exe_str))?;
+    run_reg_add(
+        r"HKCU\Software\Classes\*\shell\MzcCompress",
+        "",
+        "MZC로 압축하기",
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\*\shell\MzcCompress",
+        "Icon",
+        &exe_str,
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\*\shell\MzcCompress\command",
+        "",
+        &format!("\"{}\" compress \"%1\"", exe_str),
+    )?;
 
     // 2. 폴더(디렉토리) 우클릭 시 "MZC로 압축하기" 추가
-    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress", "", "MZC로 압축하기")?;
-    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress", "Icon", &exe_str)?;
-    run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress\command", "", &format!("\"{}\" compress \"%1\"", exe_str))?;
+    run_reg_add(
+        r"HKCU\Software\Classes\Directory\shell\MzcCompress",
+        "",
+        "MZC로 압축하기",
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\Directory\shell\MzcCompress",
+        "Icon",
+        &exe_str,
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\Directory\shell\MzcCompress\command",
+        "",
+        &format!("\"{}\" compress \"%1\"", exe_str),
+    )?;
 
     // 3. .mzc 확장자 등록 및 우클릭 시 "MZC로 압축 해제하기" 추가
     run_reg_add(r"HKCU\Software\Classes\.mzc", "", "MzcArchive")?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive", "", "MZC 압축 파일")?;
-    run_reg_add(r"HKCU\Software\Classes\MzcArchive\DefaultIcon", "", &format!("\"{}\",0", exe_str))?;
-    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "", "MZC로 압축 해제하기")?;
-    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "Icon", &exe_str)?;
-    run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open\command", "", &format!("\"{}\" decompress \"%1\"", exe_str))?;
-    
+    run_reg_add(
+        r"HKCU\Software\Classes\MzcArchive\DefaultIcon",
+        "",
+        &format!("\"{}\",0", exe_str),
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\MzcArchive\shell\open",
+        "",
+        "MZC로 압축 해제하기",
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\MzcArchive\shell\open",
+        "Icon",
+        &exe_str,
+    )?;
+    run_reg_add(
+        r"HKCU\Software\Classes\MzcArchive\shell\open\command",
+        "",
+        &format!("\"{}\" decompress \"%1\"", exe_str),
+    )?;
+
     println!("윈도우 마우스 우클릭 메뉴가 성공적으로 등록되었습니다.");
     Ok(())
 }
@@ -1240,12 +1409,12 @@ fn run_reg_add(key: &str, val_name: &str, val: &str) -> anyhow::Result<()> {
     args.push("/d");
     args.push(val);
     args.push("/f");
-    
+
     let status = std::process::Command::new("reg")
         .args(&args)
         .status()
         .context("reg.exe 실행에 실패했습니다.")?;
-        
+
     if status.success() {
         Ok(())
     } else {
@@ -1272,7 +1441,7 @@ fn run_reg_delete(key: &str) -> anyhow::Result<()> {
         .args(&["delete", key, "/f"])
         .status()
         .context("reg.exe 실행에 실패했습니다.")?;
-        
+
     if status.success() {
         Ok(())
     } else {

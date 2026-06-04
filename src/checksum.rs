@@ -9,17 +9,17 @@ use sha2::{Digest, Sha256};
 pub fn calculate_sha256(data: &[u8]) -> [u8; 32] {
     // Sha256 구조체의 새로운 인스턴스를 생성(초기화)합니다.
     let mut hasher = Sha256::new();
-    
+
     // 데이터를 hasher에 입력합니다. 데이터 양이 많으면 여러 번 update()할 수 있습니다.
     hasher.update(data);
-    
+
     // 최종 해시 계산 결과를 finalize() 메서드로 받아옵니다.
     // 결과는 GenericArray 타입으로 반환되므로, 이를 Rust의 표준 32바이트 고정 배열로 변환하기 위해
     // into() 메서드를 호출합니다.
     let result = hasher.finalize();
     let mut hash_bytes = [0u8; 32];
     hash_bytes.copy_from_slice(&result);
-    
+
     hash_bytes
 }
 

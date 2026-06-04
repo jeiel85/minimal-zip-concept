@@ -1,6 +1,6 @@
-use std::collections::BinaryHeap;
-use std::cmp::Ordering;
 use crate::error::MzcError;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 /// 허프만 트리 구축을 위한 노드 구조체입니다.
 /// 최소 힙(Min-Heap)으로 작동할 수 있도록 `Ord`와 `PartialOrd` 트레이트를 사용자 정의합니다.
@@ -165,11 +165,7 @@ fn build_huffman_tree(frequencies: &[u32; 256]) -> Option<HuffmanNode> {
     while heap.len() > 1 {
         let left = heap.pop().unwrap();
         let right = heap.pop().unwrap();
-        let parent = HuffmanNode::new_internal(
-            left.frequency + right.frequency,
-            left,
-            right,
-        );
+        let parent = HuffmanNode::new_internal(left.frequency + right.frequency, left, right);
         heap.push(parent);
     }
 
@@ -211,7 +207,8 @@ pub fn huffman_compress(data: &[u8]) -> Vec<u8> {
     }
 
     // 2. 허프만 트리 빌드
-    let tree = build_huffman_tree(&frequencies).expect("1개 이상의 기호가 감지되어 트리가 성립되어야 합니다.");
+    let tree = build_huffman_tree(&frequencies)
+        .expect("1개 이상의 기호가 감지되어 트리가 성립되어야 합니다.");
 
     // 3. 코드 테이블 맵 생성
     let mut code_table = [(0u32, 0usize); 256];
@@ -241,14 +238,18 @@ pub fn huffman_compress(data: &[u8]) -> Vec<u8> {
 /// # 파라미터:
 /// - `compressed_payload`: [1024바이트 빈도표 헤더] + [가변 비트스트림] 구조
 /// - `original_size`: 해제 대상의 기대 원본 크기
-pub fn huffman_decompress(compressed_payload: &[u8], original_size: usize) -> Result<Vec<u8>, MzcError> {
+pub fn huffman_decompress(
+    compressed_payload: &[u8],
+    original_size: usize,
+) -> Result<Vec<u8>, MzcError> {
     if original_size == 0 {
         return Ok(Vec::new());
     }
 
     if compressed_payload.len() < 1024 {
         return Err(MzcError::HuffmanError {
-            message: "허프만 페이로드 데이터가 너무 짧습니다. 최소 1024바이트 빈도표가 필요합니다.".to_string(),
+            message: "허프만 페이로드 데이터가 너무 짧습니다. 최소 1024바이트 빈도표가 필요합니다."
+                .to_string(),
         });
     }
 
@@ -282,14 +283,22 @@ pub fn huffman_decompress(compressed_payload: &[u8], original_size: usize) -> Re
             let bit = bit_reader.read_bit()?;
             if bit {
                 // 1이면 우측 자식 노드로 이동
-                current_node = current_node.right.as_ref().ok_or_else(|| MzcError::HuffmanError {
-                    message: "허프만 트리 우측 리프 분기가 손상되었습니다.".to_string(),
-                })?;
+                current_node =
+                    current_node
+                        .right
+                        .as_ref()
+                        .ok_or_else(|| MzcError::HuffmanError {
+                            message: "허프만 트리 우측 리프 분기가 손상되었습니다.".to_string(),
+                        })?;
             } else {
                 // 0이면 좌측 자식 노드로 이동
-                current_node = current_node.left.as_ref().ok_or_else(|| MzcError::HuffmanError {
-                    message: "허프만 트리 좌측 리프 분기가 손상되었습니다.".to_string(),
-                })?;
+                current_node =
+                    current_node
+                        .left
+                        .as_ref()
+                        .ok_or_else(|| MzcError::HuffmanError {
+                            message: "허프만 트리 좌측 리프 분기가 손상되었습니다.".to_string(),
+                        })?;
             }
         }
 
@@ -375,7 +384,8 @@ pub fn decompress_code_lengths(compressed: &[u8]) -> Result<[u8; 256], MzcError>
             let run_len = ((byte & 0x7F) as usize) + 1;
             if idx + run_len > 256 {
                 return Err(MzcError::HuffmanError {
-                    message: "오버플로우: 디코딩된 코드 길이 배열의 크기가 256을 초과합니다.".to_string(),
+                    message: "오버플로우: 디코딩된 코드 길이 배열의 크기가 256을 초과합니다."
+                        .to_string(),
                 });
             }
             for i in 0..run_len {
@@ -387,7 +397,8 @@ pub fn decompress_code_lengths(compressed: &[u8]) -> Result<[u8; 256], MzcError>
             let run_len = ((byte & 0x03) as usize) + 1;
             if idx + run_len > 256 {
                 return Err(MzcError::HuffmanError {
-                    message: "오버플로우: 디코딩된 코드 길이 배열의 크기가 256을 초과합니다.".to_string(),
+                    message: "오버플로우: 디코딩된 코드 길이 배열의 크기가 256을 초과합니다."
+                        .to_string(),
                 });
             }
             for i in 0..run_len {
@@ -398,7 +409,10 @@ pub fn decompress_code_lengths(compressed: &[u8]) -> Result<[u8; 256], MzcError>
     }
     if idx < 256 {
         return Err(MzcError::HuffmanError {
-            message: format!("과소 디코딩: 코드 길이가 256개 채워지지 않았습니다 (채워진 개수: {}).", idx),
+            message: format!(
+                "과소 디코딩: 코드 길이가 256개 채워지지 않았습니다 (채워진 개수: {}).",
+                idx
+            ),
         });
     }
     Ok(lengths)
@@ -412,7 +426,8 @@ pub fn huffman_compress_dynamic(data: &[u8]) -> Vec<u8> {
     for &byte in data {
         frequencies[byte as usize] += 1;
     }
-    let tree = build_huffman_tree(&frequencies).expect("1개 이상의 기호가 감지되어 트리가 성립되어야 합니다.");
+    let tree = build_huffman_tree(&frequencies)
+        .expect("1개 이상의 기호가 감지되어 트리가 성립되어야 합니다.");
     let mut code_lengths = [0u8; 256];
     get_code_lengths(&tree, 0, &mut code_lengths);
     let code_table = build_canonical_codes(&code_lengths);
@@ -431,7 +446,10 @@ pub fn huffman_compress_dynamic(data: &[u8]) -> Vec<u8> {
     output
 }
 
-pub fn huffman_decompress_dynamic(compressed_payload: &[u8], original_size: usize) -> Result<Vec<u8>, MzcError> {
+pub fn huffman_decompress_dynamic(
+    compressed_payload: &[u8],
+    original_size: usize,
+) -> Result<Vec<u8>, MzcError> {
     if original_size == 0 {
         return Ok(Vec::new());
     }
@@ -495,13 +513,21 @@ pub fn huffman_decompress_dynamic(compressed_payload: &[u8], original_size: usiz
         while current_node.symbol.is_none() {
             let bit = bit_reader.read_bit()?;
             if bit {
-                current_node = current_node.right.as_ref().ok_or_else(|| MzcError::HuffmanError {
-                    message: "허프만 트리 우측 리프 분기가 손상되었습니다.".to_string(),
-                })?;
+                current_node =
+                    current_node
+                        .right
+                        .as_ref()
+                        .ok_or_else(|| MzcError::HuffmanError {
+                            message: "허프만 트리 우측 리프 분기가 손상되었습니다.".to_string(),
+                        })?;
             } else {
-                current_node = current_node.left.as_ref().ok_or_else(|| MzcError::HuffmanError {
-                    message: "허프만 트리 좌측 리프 분기가 손상되었습니다.".to_string(),
-                })?;
+                current_node =
+                    current_node
+                        .left
+                        .as_ref()
+                        .ok_or_else(|| MzcError::HuffmanError {
+                            message: "허프만 트리 좌측 리프 분기가 손상되었습니다.".to_string(),
+                        })?;
             }
         }
         if let Some(symbol) = current_node.symbol {

@@ -224,7 +224,9 @@ impl MzcHeader {
     /// 구버전 "MZC1", 신버전 "MZC2", 그리고 최신 "MZC3" 규격을 시작 매직 바이트로 판별하는 이중 파싱 분기(Double-Dispatch)를 수행합니다.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, MzcError> {
         if bytes.len() < 4 {
-            return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+            return Err(MzcError::TruncatedHeader {
+                read_bytes: bytes.len(),
+            });
         }
 
         let magic: [u8; 4] = bytes[0..4]
@@ -234,7 +236,9 @@ impl MzcHeader {
         if magic == *MAGIC_MZC1 {
             // ================== MZC1 (54바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC1 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -278,7 +282,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC2 {
             // ================== MZC2 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC2 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -332,7 +338,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC3 {
             // ================== MZC3 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC3 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -385,7 +393,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC4 {
             // ================== MZC4 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC2 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -438,7 +448,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC5 {
             // ================== MZC5 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC5 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -492,7 +504,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC6 {
             // ================== MZC6 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC6 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];
@@ -546,7 +560,9 @@ impl MzcHeader {
         } else if magic == *MAGIC_MZC7 {
             // ================== MZC7 (56바이트) 파싱 ==================
             if bytes.len() < HEADER_SIZE_MZC7 {
-                return Err(MzcError::TruncatedHeader { read_bytes: bytes.len() });
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
             }
 
             let version = bytes[4];

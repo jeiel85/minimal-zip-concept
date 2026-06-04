@@ -50,7 +50,8 @@ fn assert_dirs_equal(expected: &Path, actual: &Path) {
             let exp_content = fs::read(&exp_path).expect("원본 파일 읽기 실패");
             let act_content = fs::read(&act_path).expect("복원 파일 읽기 실패");
             assert_eq!(
-                exp_content, act_content,
+                exp_content,
+                act_content,
                 "파일 내용 불일치: {:?} (expected {} bytes, got {} bytes)",
                 exp,
                 exp_content.len(),
@@ -104,7 +105,10 @@ fn test_archive_roundtrip_with_files() {
 
     // 아카이브 생성 및 추출
     let archive_bytes = archive_directory(&src_dir).expect("아카이브 생성 실패");
-    assert!(archive_bytes.len() > 8, "아카이브 바이트가 비정상적으로 작습니다.");
+    assert!(
+        archive_bytes.len() > 8,
+        "아카이브 바이트가 비정상적으로 작습니다."
+    );
 
     extract_archive(&archive_bytes, &dest_dir).expect("아카이브 추출 실패");
 
@@ -168,7 +172,14 @@ fn test_archive_roundtrip_nested_dirs() {
 
     // 심층 파일 내용 확인
     assert_eq!(
-        fs::read(dest_dir.join("level1").join("level2").join("level3").join("file3.txt")).unwrap(),
+        fs::read(
+            dest_dir
+                .join("level1")
+                .join("level2")
+                .join("level3")
+                .join("file3.txt")
+        )
+        .unwrap(),
         b"Level 3 - deepest file!"
     );
     assert_eq!(
@@ -252,10 +263,7 @@ fn test_archive_large_file() {
         data.len(),
         restored_data.len(),
     );
-    assert_eq!(
-        data, restored_data,
-        "대용량 파일(1MB) 바이트 내용 불일치"
-    );
+    assert_eq!(data, restored_data, "대용량 파일(1MB) 바이트 내용 불일치");
 
     cleanup_temp_dir(&src_dir);
     cleanup_temp_dir(&dest_dir);
@@ -386,7 +394,12 @@ fn test_zip_slip_defense() {
 
     // 악의적 파일이 실제로 생성되지 않았는지 확인
     // (dest_dir 외부 경로에 파일이 없어야 함)
-    let escaped_path = dest_dir.join("..").join("..").join("..").join("etc").join("evil.txt");
+    let escaped_path = dest_dir
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("etc")
+        .join("evil.txt");
     assert!(
         !escaped_path.exists(),
         "Zip-Slip 공격으로 탈출 경로에 파일이 생성되었습니다: {:?}",

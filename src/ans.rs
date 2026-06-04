@@ -57,7 +57,9 @@ pub fn ans_compress(data: &[u8]) -> Result<Vec<u8>, MzcError> {
             let mut sorted_active = active_symbols.clone();
             sorted_active.sort_by_key(|&s| std::cmp::Reverse(f[s]));
             for &s in &sorted_active {
-                if diff == 0 { break; }
+                if diff == 0 {
+                    break;
+                }
                 let val = f[s];
                 if val > 1 {
                     let sub = std::cmp::min(val - 1, diff as u32);
@@ -121,7 +123,7 @@ pub fn ans_compress(data: &[u8]) -> Result<Vec<u8>, MzcError> {
 
     // 5. Serialize output
     let mut out = Vec::new();
-    
+
     // Header: Number of active symbols
     let active_count = active_symbols.len() as u16;
     out.extend_from_slice(&active_count.to_le_bytes());
@@ -172,7 +174,10 @@ pub fn ans_decompress(ans_bytes: &[u8], original_size: usize) -> Result<Vec<u8>,
     let n = ans_bytes.len();
 
     if pos + 2 > n {
-        return Err(MzcError::TruncatedBlock { expected: 2, found: n - pos });
+        return Err(MzcError::TruncatedBlock {
+            expected: 2,
+            found: n - pos,
+        });
     }
 
     let active_count = u16::from_le_bytes(ans_bytes[pos..pos + 2].try_into().unwrap()) as usize;
@@ -184,7 +189,10 @@ pub fn ans_decompress(ans_bytes: &[u8], original_size: usize) -> Result<Vec<u8>,
 
     for _ in 0..active_count {
         if pos + 3 > n {
-            return Err(MzcError::TruncatedBlock { expected: 3, found: n - pos });
+            return Err(MzcError::TruncatedBlock {
+                expected: 3,
+                found: n - pos,
+            });
         }
         let s = ans_bytes[pos] as usize;
         let freq = u16::from_le_bytes(ans_bytes[pos + 1..pos + 3].try_into().unwrap()) as u32;
@@ -197,25 +205,37 @@ pub fn ans_decompress(ans_bytes: &[u8], original_size: usize) -> Result<Vec<u8>,
 
     if sum_f != L as u32 {
         return Err(MzcError::HuffmanError {
-            message: format!("tANS frequency sum mismatch: expected {}, found {}", L, sum_f),
+            message: format!(
+                "tANS frequency sum mismatch: expected {}, found {}",
+                L, sum_f
+            ),
         });
     }
 
     if pos + 2 > n {
-        return Err(MzcError::TruncatedBlock { expected: 2, found: n - pos });
+        return Err(MzcError::TruncatedBlock {
+            expected: 2,
+            found: n - pos,
+        });
     }
     let mut x = u16::from_le_bytes(ans_bytes[pos..pos + 2].try_into().unwrap());
     pos += 2;
 
     if pos + 4 > n {
-        return Err(MzcError::TruncatedBlock { expected: 4, found: n - pos });
+        return Err(MzcError::TruncatedBlock {
+            expected: 4,
+            found: n - pos,
+        });
     }
     let total_bits = u32::from_le_bytes(ans_bytes[pos..pos + 4].try_into().unwrap()) as usize;
     pos += 4;
 
     let bit_bytes_len = (total_bits + 7) / 8;
     if pos + bit_bytes_len > n {
-        return Err(MzcError::TruncatedBlock { expected: bit_bytes_len, found: n - pos });
+        return Err(MzcError::TruncatedBlock {
+            expected: bit_bytes_len,
+            found: n - pos,
+        });
     }
     let bit_bytes = &ans_bytes[pos..pos + bit_bytes_len];
 
@@ -236,7 +256,14 @@ pub fn ans_decompress(ans_bytes: &[u8], original_size: usize) -> Result<Vec<u8>,
         next_state[s] = f[s] as u16;
     }
 
-    let mut decoder_table = vec![DecoderEntry { symbol: 0, nb_bits: 0, base: 0 }; L];
+    let mut decoder_table = vec![
+        DecoderEntry {
+            symbol: 0,
+            nb_bits: 0,
+            base: 0
+        };
+        L
+    ];
     for state_idx in 0..L {
         let s = symbol_table[state_idx];
         let s_idx = s as usize;

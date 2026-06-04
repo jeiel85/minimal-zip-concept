@@ -43,12 +43,12 @@ fn main() {
 
     // 3. Perform decompression
     println!("Decompressing data...");
-    let decompressed_bytes = mzc::decompress_bytes_v2(&compressed_bytes)
-        .expect("Decompression failed");
+    let decompressed_bytes =
+        mzc::decompress_bytes_v2(&compressed_bytes).expect("Decompression failed");
 
     // 4. Verify roundtrip correctness
-    let decompressed_text = String::from_utf8(decompressed_bytes)
-        .expect("Decompressed bytes are not valid UTF-8");
+    let decompressed_text =
+        String::from_utf8(decompressed_bytes).expect("Decompressed bytes are not valid UTF-8");
 
     if decompressed_text == original_text {
         println!("Success! The decompressed text matches the original perfectly.");

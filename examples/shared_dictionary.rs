@@ -25,10 +25,14 @@ fn main() {
     let dict = build_dictionary(&training_corpus);
     let dict_bytes = dict.to_bytes();
     println!("Trained Dictionary size: {} bytes", dict_bytes.len());
-    println!("Number of extracted dictionary entries: {}\n", dict.entries.len());
+    println!(
+        "Number of extracted dictionary entries: {}\n",
+        dict.entries.len()
+    );
 
     // 3. New input log line to compress
-    let test_log = "2026-06-04T11:25:00Z [INFO] User login succeeded from IP: 192.168.1.20. Status: 200";
+    let test_log =
+        "2026-06-04T11:25:00Z [INFO] User login succeeded from IP: 192.168.1.20. Status: 200";
     let test_bytes = test_log.as_bytes();
     println!("Test Log Size (Uncompressed): {} bytes", test_bytes.len());
 
@@ -46,7 +50,10 @@ fn main() {
         false,
         Some(&dict_bytes),
     );
-    println!("Compressed Size (using dictionary): {} bytes", compressed_bytes.len());
+    println!(
+        "Compressed Size (using dictionary): {} bytes",
+        compressed_bytes.len()
+    );
     let ratio = (compressed_bytes.len() as f64 / test_bytes.len() as f64) * 100.0;
     println!("Compression Ratio: {:.2}%\n", ratio);
 
@@ -56,8 +63,8 @@ fn main() {
         .expect("Decompression with dictionary failed");
 
     // 6. Verify roundtrip correctness
-    let decompressed_log = String::from_utf8(decompressed_bytes)
-        .expect("Decompressed bytes are not valid UTF-8");
+    let decompressed_log =
+        String::from_utf8(decompressed_bytes).expect("Decompressed bytes are not valid UTF-8");
 
     if decompressed_log == test_log {
         println!("Success! The decompressed log matches the original test log perfectly.");

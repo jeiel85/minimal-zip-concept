@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::error::MzcError;
-use crate::format::{ALGORITHM_RLE, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77};
+use crate::format::{ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE};
+use std::collections::HashMap;
 
 const BLOCK_TYPE_LITERAL: u8 = 0x00;
 const BLOCK_TYPE_RUN: u8 = 0x01;
@@ -20,7 +20,9 @@ pub struct Dictionary {
 impl Dictionary {
     /// 새로운 빈 사전을 생성합니다.
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// 사전을 2바이트 카운트와 가변 엔트리 구조로 직렬화합니다.
@@ -180,16 +182,56 @@ pub struct CompressionConfig {
 impl CompressionConfig {
     pub fn from_level(level: u8) -> Self {
         match level {
-            1 => Self { window_size: 1024, scan_limit: 32, lazy_matching: false },
-            2 => Self { window_size: 2048, scan_limit: 64, lazy_matching: false },
-            3 => Self { window_size: 4096, scan_limit: 128, lazy_matching: false },
-            4 => Self { window_size: 8192, scan_limit: 256, lazy_matching: true },
-            5 => Self { window_size: 16384, scan_limit: 512, lazy_matching: true },
-            6 => Self { window_size: 32768, scan_limit: 2048, lazy_matching: true },
-            7 => Self { window_size: 32768, scan_limit: 4096, lazy_matching: true },
-            8 => Self { window_size: 65536, scan_limit: 8192, lazy_matching: true },
-            9 => Self { window_size: 65536, scan_limit: 32768, lazy_matching: true },
-            _ => Self { window_size: 32768, scan_limit: 2048, lazy_matching: true },
+            1 => Self {
+                window_size: 1024,
+                scan_limit: 32,
+                lazy_matching: false,
+            },
+            2 => Self {
+                window_size: 2048,
+                scan_limit: 64,
+                lazy_matching: false,
+            },
+            3 => Self {
+                window_size: 4096,
+                scan_limit: 128,
+                lazy_matching: false,
+            },
+            4 => Self {
+                window_size: 8192,
+                scan_limit: 256,
+                lazy_matching: true,
+            },
+            5 => Self {
+                window_size: 16384,
+                scan_limit: 512,
+                lazy_matching: true,
+            },
+            6 => Self {
+                window_size: 32768,
+                scan_limit: 2048,
+                lazy_matching: true,
+            },
+            7 => Self {
+                window_size: 32768,
+                scan_limit: 4096,
+                lazy_matching: true,
+            },
+            8 => Self {
+                window_size: 65536,
+                scan_limit: 8192,
+                lazy_matching: true,
+            },
+            9 => Self {
+                window_size: 65536,
+                scan_limit: 32768,
+                lazy_matching: true,
+            },
+            _ => Self {
+                window_size: 32768,
+                scan_limit: 2048,
+                lazy_matching: true,
+            },
         }
     }
 }
@@ -211,7 +253,7 @@ pub fn apply_delta_filter(data: &mut [u8]) {
     {
         if _simd_enabled {
             let mut i = n - 1;
-            
+
             // AVX2 가속 (32바이트씩 처리)
             if is_x86_feature_detected!("avx2") && i >= 32 {
                 while i >= 32 {
@@ -219,14 +261,15 @@ pub fn apply_delta_filter(data: &mut [u8]) {
                     unsafe {
                         use std::arch::x86_64::*;
                         let curr = _mm256_loadu_si256(data[start_idx..].as_ptr() as *const __m256i);
-                        let prev = _mm256_loadu_si256(data[start_idx - 1..].as_ptr() as *const __m256i);
+                        let prev =
+                            _mm256_loadu_si256(data[start_idx - 1..].as_ptr() as *const __m256i);
                         let diff = _mm256_sub_epi8(curr, prev);
                         _mm256_storeu_si256(data[start_idx..].as_mut_ptr() as *mut __m256i, diff);
                     }
                     i -= 32;
                 }
             }
-            
+
             // SSE2 fallback (16바이트씩 처리)
             if is_x86_feature_detected!("sse2") && i >= 16 {
                 while i >= 16 {
@@ -234,14 +277,15 @@ pub fn apply_delta_filter(data: &mut [u8]) {
                     unsafe {
                         use std::arch::x86_64::*;
                         let curr = _mm_loadu_si128(data[start_idx..].as_ptr() as *const __m128i);
-                        let prev = _mm_loadu_si128(data[start_idx - 1..].as_ptr() as *const __m128i);
+                        let prev =
+                            _mm_loadu_si128(data[start_idx - 1..].as_ptr() as *const __m128i);
                         let diff = _mm_sub_epi8(curr, prev);
                         _mm_storeu_si128(data[start_idx..].as_mut_ptr() as *mut __m128i, diff);
                     }
                     i -= 16;
                 }
             }
-            
+
             for j in (1..=i).rev() {
                 data[j] = data[j].wrapping_sub(data[j - 1]);
             }
@@ -277,7 +321,9 @@ pub fn apply_delta_filter(data: &mut [u8]) {
 }
 
 pub fn inverse_delta_filter(data: &mut [u8]) {
-    if data.is_empty() { return; }
+    if data.is_empty() {
+        return;
+    }
     for i in 1..data.len() {
         data[i] = data[i].wrapping_add(data[i - 1]);
     }
@@ -328,8 +374,8 @@ fn apply_arm64_bcj(data: &mut [u8]) {
     }
     let mut i = 0;
     while i + 3 < n {
-        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
-        let op = data[i+3];
+        let inst = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        let op = data[i + 3];
         if (op >= 0x14 && op <= 0x17) || (op >= 0x94 && op <= 0x97) {
             let rel = inst & 0x03FFFFFF;
             let mut rel_signed = rel as i32;
@@ -340,7 +386,7 @@ fn apply_arm64_bcj(data: &mut [u8]) {
             let abs_bytes = rel_bytes.wrapping_add(i as i32);
             let new_rel = ((abs_bytes as u32) >> 2) & 0x03FFFFFF;
             let new_inst = (inst & 0xFC000000) | new_rel;
-            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            data[i..i + 4].copy_from_slice(&new_inst.to_le_bytes());
             i += 4;
         } else {
             i += 4;
@@ -355,15 +401,15 @@ fn inverse_arm64_bcj(data: &mut [u8]) {
     }
     let mut i = 0;
     while i + 3 < n {
-        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
-        let op = data[i+3];
+        let inst = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        let op = data[i + 3];
         if (op >= 0x14 && op <= 0x17) || (op >= 0x94 && op <= 0x97) {
             let abs_val = inst & 0x03FFFFFF;
             let abs_bytes = abs_val.wrapping_mul(4) as i32;
             let rel_bytes = abs_bytes.wrapping_sub(i as i32);
             let rel = ((rel_bytes >> 2) as u32) & 0x03FFFFFF;
             let new_inst = (inst & 0xFC000000) | rel;
-            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            data[i..i + 4].copy_from_slice(&new_inst.to_le_bytes());
             i += 4;
         } else {
             i += 4;
@@ -378,13 +424,14 @@ fn apply_riscv_bcj(data: &mut [u8]) {
     }
     let mut i = 0;
     while i + 3 < n {
-        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        let inst = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
         if (inst & 0x7F) == 0x6F {
             let imm20 = (inst >> 31) & 1;
             let imm10_1 = (inst >> 21) & 0x3FF;
             let imm11 = (inst >> 20) & 1;
             let imm19_12 = (inst >> 12) & 0xFF;
-            let offset_scrambled = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+            let offset_scrambled =
+                (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
             let mut offset = offset_scrambled as i32;
             if (offset & 0x100000) != 0 {
                 offset |= -0x200000;
@@ -395,8 +442,9 @@ fn apply_riscv_bcj(data: &mut [u8]) {
             let b10_1 = (u_offset >> 1) & 0x3FF;
             let b11 = (u_offset >> 11) & 1;
             let b19_12 = (u_offset >> 12) & 0xFF;
-            let new_inst = (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
-            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            let new_inst =
+                (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
+            data[i..i + 4].copy_from_slice(&new_inst.to_le_bytes());
             i += 4;
         } else {
             i += 4;
@@ -411,13 +459,14 @@ fn inverse_riscv_bcj(data: &mut [u8]) {
     }
     let mut i = 0;
     while i + 3 < n {
-        let inst = u32::from_le_bytes([data[i], data[i+1], data[i+2], data[i+3]]);
+        let inst = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
         if (inst & 0x7F) == 0x6F {
             let imm20 = (inst >> 31) & 1;
             let imm10_1 = (inst >> 21) & 0x3FF;
             let imm11 = (inst >> 20) & 1;
             let imm19_12 = (inst >> 12) & 0xFF;
-            let abs_addr_scrambled = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+            let abs_addr_scrambled =
+                (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
             let mut abs_addr = abs_addr_scrambled as i32;
             if (abs_addr & 0x100000) != 0 {
                 abs_addr |= -0x200000;
@@ -428,8 +477,9 @@ fn inverse_riscv_bcj(data: &mut [u8]) {
             let b10_1 = (u_offset >> 1) & 0x3FF;
             let b11 = (u_offset >> 11) & 1;
             let b19_12 = (u_offset >> 12) & 0xFF;
-            let new_inst = (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
-            data[i..i+4].copy_from_slice(&new_inst.to_le_bytes());
+            let new_inst =
+                (inst & 0x00000FFF) | (b20 << 31) | (b10_1 << 21) | (b11 << 20) | (b19_12 << 12);
+            data[i..i + 4].copy_from_slice(&new_inst.to_le_bytes());
             i += 4;
         } else {
             i += 4;
@@ -459,7 +509,11 @@ pub fn find_lz77_match_with_limit(
         return None;
     }
 
-    let start = if pos > window_size { pos - window_size } else { 0 };
+    let start = if pos > window_size {
+        pos - window_size
+    } else {
+        0
+    };
     let mut best_dist = 0;
     let mut best_len = 0;
     let mut steps = 0;
@@ -473,7 +527,11 @@ pub fn find_lz77_match_with_limit(
         if data[j] != data[pos] {
             continue;
         }
-        if best_len > 0 && j + best_len < pos && pos + best_len < data.len() && data[j + best_len] != data[pos + best_len] {
+        if best_len > 0
+            && j + best_len < pos
+            && pos + best_len < data.len()
+            && data[j + best_len] != data[pos + best_len]
+        {
             continue;
         }
 
@@ -560,7 +618,11 @@ impl Lz77HashChains {
                 break;
             }
 
-            if best_len > 0 && match_pos + best_len < pos && pos + best_len < data.len() && data[match_pos + best_len] != data[pos + best_len] {
+            if best_len > 0
+                && match_pos + best_len < pos
+                && pos + best_len < data.len()
+                && data[match_pos + best_len] != data[pos + best_len]
+            {
                 j = self.prev[match_pos];
                 continue;
             }
@@ -615,9 +677,15 @@ pub fn compress_to_blocks(
 
         // 1. RLE run
         let mut run_count = 0;
-        if algorithm_type == ALGORITHM_RLE || algorithm_type == ALGORITHM_HYBRID || algorithm_type == ALGORITHM_LZ77 {
+        if algorithm_type == ALGORITHM_RLE
+            || algorithm_type == ALGORITHM_HYBRID
+            || algorithm_type == ALGORITHM_LZ77
+        {
             let current_val = data[i];
-            while i + run_count < n && data[i + run_count] == current_val && run_count < MAX_BLOCK_LEN {
+            while i + run_count < n
+                && data[i + run_count] == current_val
+                && run_count < MAX_BLOCK_LEN
+            {
                 run_count += 1;
             }
             if run_count >= 4 {
@@ -628,7 +696,10 @@ pub fn compress_to_blocks(
         // 2. Token match
         let mut best_match_idx: Option<usize> = None;
         let mut best_match_len = 0;
-        if algorithm_type == ALGORITHM_DICT || algorithm_type == ALGORITHM_HYBRID || algorithm_type == ALGORITHM_LZ77 {
+        if algorithm_type == ALGORITHM_DICT
+            || algorithm_type == ALGORITHM_HYBRID
+            || algorithm_type == ALGORITHM_LZ77
+        {
             for (idx, entry) in dict.entries.iter().enumerate() {
                 let entry_len = entry.len();
                 if i + entry_len <= n && &data[i..i + entry_len] == entry {
@@ -653,13 +724,17 @@ pub fn compress_to_blocks(
                 inserted_up_to += 1;
             }
 
-            if let Some((dist, len)) = chains.find_match(data, i, config.window_size, config.scan_limit) {
+            if let Some((dist, len)) =
+                chains.find_match(data, i, config.window_size, config.scan_limit)
+            {
                 let mut defer_match = false;
                 if config.lazy_matching && i + 1 < n {
                     // Temporarily insert current pos for lazy evaluation
                     chains.insert(i, data);
                     inserted_up_to = i + 1;
-                    if let Some((_, next_len)) = chains.find_match(data, i + 1, config.window_size, config.scan_limit) {
+                    if let Some((_, next_len)) =
+                        chains.find_match(data, i + 1, config.window_size, config.scan_limit)
+                    {
                         if next_len > len {
                             defer_match = true;
                         }
@@ -685,10 +760,16 @@ pub fn compress_to_blocks(
                 blocks.push(CompressBlock::Token(token_idx));
                 i += best_match_len;
             } else if max_savings == run_savings {
-                blocks.push(CompressBlock::Run { count: run_count as u16, value: data[i] });
+                blocks.push(CompressBlock::Run {
+                    count: run_count as u16,
+                    value: data[i],
+                });
                 i += run_count;
             } else {
-                blocks.push(CompressBlock::BackRef { distance: lz77_dist, length: lz77_len });
+                blocks.push(CompressBlock::BackRef {
+                    distance: lz77_dist,
+                    length: lz77_len,
+                });
                 i += lz77_len as usize;
             }
         } else {
@@ -773,7 +854,7 @@ pub fn serialize_blocks_v5(blocks: &[CompressBlock]) -> Vec<u8> {
                 }
             }
         }
-        
+
         let flag_bytes = flag.to_le_bytes();
         out[flag_pos] = flag_bytes[0];
         out[flag_pos + 1] = flag_bytes[1];
@@ -785,11 +866,7 @@ pub fn serialize_blocks_v5(blocks: &[CompressBlock]) -> Vec<u8> {
 }
 
 /// RLE, 사전 토큰, LZ77 백레퍼런스, 리터럴 블록을 동작 모드(`algorithm_type`)에 맞춰 탐욕적으로 인코딩합니다.
-pub fn rle_compress_hybrid(
-    data: &[u8],
-    dict: &Dictionary,
-    algorithm_type: u8,
-) -> Vec<u8> {
+pub fn rle_compress_hybrid(data: &[u8], dict: &Dictionary, algorithm_type: u8) -> Vec<u8> {
     let config = CompressionConfig::from_level(6);
     let blocks = compress_to_blocks(data, dict, algorithm_type, &config);
     serialize_blocks_v2(&blocks)
@@ -1158,4 +1235,3 @@ pub fn rle_decompress(payload: &[u8]) -> Result<Vec<u8>, MzcError> {
 
     Ok(decompressed)
 }
-

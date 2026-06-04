@@ -1,16 +1,16 @@
-use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender, Receiver};
-use eframe::egui;
-use egui_plot::{Line, Plot, PlotPoints, BarChart, Bar};
-use crate::cli::{CompressionMode, EntropyMode};
 use crate::checksum::calculate_sha256;
-use crate::rle::Dictionary;
-use crate::huffman::{huffman_decompress, huffman_decompress_dynamic};
+use crate::cli::{CompressionMode, EntropyMode};
 use crate::format::{
-    MzcHeader, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
-    VERSION_MZC7, FILTER_DELTA, FILTER_BCJ, FILTER_DYNAMIC_HUFFMAN, FILTER_ANS, ALGORITHM_RLE,
-    ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2
+    MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
+    FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
+    VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6, VERSION_MZC7,
 };
+use crate::huffman::{huffman_decompress, huffman_decompress_dynamic};
+use crate::rle::Dictionary;
+use eframe::egui;
+use egui_plot::{Bar, BarChart, Line, Plot, PlotPoints};
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 /// **MZC 그래픽 데스크톱 GUI 애플리케이션을 구동합니다.**
 ///
@@ -26,7 +26,7 @@ pub fn run_gui_app() -> Result<(), eframe::Error> {
             .with_min_inner_size([850.0, 560.0]),
         ..Default::default()
     };
-    
+
     // 네이티브 창을 기동하여 GUI 루프를 실행합니다.
     eframe::run_native(
         "MZC Desktop App",
@@ -216,7 +216,7 @@ pub struct MzcGuiApp {
     cm_sim_prev1: u8,
     cm_sim_prev2: u8,
     cm_sim_probabilities: [u32; 5], // p0, p1, p2, p3, p4
-    cm_sim_weights: [[i32; 5]; 8], // w0..w4
+    cm_sim_weights: [[i32; 5]; 8],  // w0..w4
     cm_sim_mixed_p: u32,
     cm_sim_autoplay: bool,
     cm_sim_last_step_time: std::time::Instant,
@@ -348,7 +348,7 @@ impl MzcGuiApp {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
             let url = "https://api.github.com/repos/jeiel85/minimal-zip-concept/releases/latest";
-            
+
             #[derive(serde::Deserialize, Debug)]
             struct GithubRelease {
                 tag_name: String,
@@ -363,17 +363,22 @@ impl MzcGuiApp {
                 browser_download_url: String,
             }
 
-            match ureq::get(url).set("User-Agent", "minimal-zip-concept-updater").call() {
+            match ureq::get(url)
+                .set("User-Agent", "minimal-zip-concept-updater")
+                .call()
+            {
                 Ok(response) => {
                     match serde_json::from_reader::<_, GithubRelease>(response.into_reader()) {
                         Ok(release) => {
-                            let clean_version = release.tag_name.trim_start_matches('v').to_string();
-                            let download_url = release.assets
+                            let clean_version =
+                                release.tag_name.trim_start_matches('v').to_string();
+                            let download_url = release
+                                .assets
                                 .iter()
                                 .find(|asset| asset.name.ends_with(".exe"))
                                 .map(|asset| asset.browser_download_url.clone())
                                 .unwrap_or_else(|| release.html_url.clone());
-                            
+
                             let info = UpdateInfo {
                                 version: clean_version,
                                 url: download_url,
@@ -384,16 +389,24 @@ impl MzcGuiApp {
                             if is_newer_version(&info.version, current_version) {
                                 let _ = tx.send(TaskResult::UpdateCheckResult(Ok(info)));
                             } else {
-                                let _ = tx.send(TaskResult::UpdateCheckResult(Err("최신 버전을 사용 중입니다.".to_string())));
+                                let _ = tx.send(TaskResult::UpdateCheckResult(Err(
+                                    "최신 버전을 사용 중입니다.".to_string(),
+                                )));
                             }
                         }
                         Err(e) => {
-                            let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!("업데이트 정보 파싱 실패: {}", e))));
+                            let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!(
+                                "업데이트 정보 파싱 실패: {}",
+                                e
+                            ))));
                         }
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!("업데이트 서버 연결 실패: {}", e))));
+                    let _ = tx.send(TaskResult::UpdateCheckResult(Err(format!(
+                        "업데이트 서버 연결 실패: {}",
+                        e
+                    ))));
                 }
             }
         });
@@ -409,42 +422,50 @@ impl MzcGuiApp {
                         .header("Content-Length")
                         .and_then(|s| s.parse::<usize>().ok())
                         .unwrap_or(0);
-                    
+
                     let temp_dir = std::env::temp_dir();
                     let setup_path = temp_dir.join("mzc-setup.exe");
-                    
+
                     match std::fs::File::create(&setup_path) {
                         Ok(mut file) => {
                             let mut reader = response.into_reader();
                             let mut buffer = [0; 16384];
                             let mut downloaded = 0;
-                            
+
                             loop {
                                 match reader.read(&mut buffer) {
                                     Ok(0) => break,
                                     Ok(n) => {
                                         use std::io::Write;
                                         if let Err(e) = file.write_all(&buffer[..n]) {
-                                            let _ = tx.send(TaskResult::Error(format!("다운로드 파일 쓰기 오류: {}", e)));
+                                            let _ = tx.send(TaskResult::Error(format!(
+                                                "다운로드 파일 쓰기 오류: {}",
+                                                e
+                                            )));
                                             return;
                                         }
                                         downloaded += n;
                                         if total_size > 0 {
                                             let progress = downloaded as f32 / total_size as f32;
-                                            let _ = tx.send(TaskResult::UpdateDownloadProgress(progress));
+                                            let _ = tx
+                                                .send(TaskResult::UpdateDownloadProgress(progress));
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = tx.send(TaskResult::Error(format!("다운로드 스트림 오류: {}", e)));
+                                        let _ = tx.send(TaskResult::Error(format!(
+                                            "다운로드 스트림 오류: {}",
+                                            e
+                                        )));
                                         return;
                                     }
                                 }
                             }
-                            
+
                             let _ = tx.send(TaskResult::UpdateDownloadDone(setup_path));
                         }
                         Err(e) => {
-                            let _ = tx.send(TaskResult::Error(format!("임시 파일 생성 실패: {}", e)));
+                            let _ =
+                                tx.send(TaskResult::Error(format!("임시 파일 생성 실패: {}", e)));
                         }
                     }
                 }
@@ -481,7 +502,7 @@ impl MzcGuiApp {
                 Ok(original_bytes) => {
                     let orig_size = original_bytes.len() as u64;
                     let sha256 = crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
-                    
+
                     // 지정된 사전 파일 로드
                     let dict_bytes = if let Some(ref d_path) = dict_path {
                         std::fs::read(d_path).ok()
@@ -508,11 +529,15 @@ impl MzcGuiApp {
                                 comp_size,
                                 duration,
                             });
-                        }
+                        },
                     );
-                    
+
                     let comp_size = final_output.len() as u64;
-                    let ratio = if orig_size > 0 { (comp_size as f64 / orig_size as f64) * 100.0 } else { 100.0 };
+                    let ratio = if orig_size > 0 {
+                        (comp_size as f64 / orig_size as f64) * 100.0
+                    } else {
+                        100.0
+                    };
 
                     // 이진 블록 맵 시각화를 위한 압축파일 해독 파싱 진행
                     let mut visual_blocks = Vec::new();
@@ -538,18 +563,30 @@ impl MzcGuiApp {
                             let mut pos = header.dictionary_size as usize;
                             let n = payload_bytes.len();
                             while pos < n {
-                                if pos + 12 > n { break; }
-                                let chunk_orig_size = u32::from_le_bytes(payload_bytes[pos..pos + 4].try_into().unwrap()) as usize;
-                                let comb_size = u32::from_le_bytes(payload_bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
-                                let comp_size = u32::from_le_bytes(payload_bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
+                                if pos + 12 > n {
+                                    break;
+                                }
+                                let chunk_orig_size = u32::from_le_bytes(
+                                    payload_bytes[pos..pos + 4].try_into().unwrap(),
+                                ) as usize;
+                                let comb_size = u32::from_le_bytes(
+                                    payload_bytes[pos + 4..pos + 8].try_into().unwrap(),
+                                ) as usize;
+                                let comp_size = u32::from_le_bytes(
+                                    payload_bytes[pos + 8..pos + 12].try_into().unwrap(),
+                                ) as usize;
                                 pos += 12;
-                                if pos + comp_size > n { break; }
+                                if pos + comp_size > n {
+                                    break;
+                                }
 
                                 let chunk_data = &payload_bytes[pos..pos + comp_size];
                                 pos += comp_size;
 
                                 // 엔트로피 디코딩 판별
-                                let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
+                                let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version
+                                    == VERSION_MZC7
+                                {
                                     let entropy_bits = (header.algorithm_type >> 2) & 0x07;
                                     (
                                         entropy_bits == 1,
@@ -559,21 +596,38 @@ impl MzcGuiApp {
                                     )
                                 } else {
                                     (
-                                        header.version < VERSION_MZC7 && chunk_data.len() != comb_size && (header.version != VERSION_MZC4 && (header.version < VERSION_MZC5 || (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) == 0) && (header.version < VERSION_MZC6 || (header.algorithm_type & FILTER_ANS) == 0)),
-                                        header.version == VERSION_MZC4 || (header.version >= VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0),
-                                        header.version >= VERSION_MZC6 && (header.algorithm_type & FILTER_ANS) != 0,
+                                        header.version < VERSION_MZC7
+                                            && chunk_data.len() != comb_size
+                                            && (header.version != VERSION_MZC4
+                                                && (header.version < VERSION_MZC5
+                                                    || (header.algorithm_type
+                                                        & FILTER_DYNAMIC_HUFFMAN)
+                                                        == 0)
+                                                && (header.version < VERSION_MZC6
+                                                    || (header.algorithm_type & FILTER_ANS) == 0)),
+                                        header.version == VERSION_MZC4
+                                            || (header.version >= VERSION_MZC5
+                                                && (header.algorithm_type
+                                                    & FILTER_DYNAMIC_HUFFMAN)
+                                                    != 0),
+                                        header.version >= VERSION_MZC6
+                                            && (header.algorithm_type & FILTER_ANS) != 0,
                                         false,
                                     )
                                 };
 
                                 let unhuff = if is_cm {
-                                    crate::cm::cm_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
+                                    crate::cm::cm_decompress(chunk_data, comb_size)
+                                        .unwrap_or_else(|_| chunk_data.to_vec())
                                 } else if is_ans {
-                                    crate::ans::ans_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
+                                    crate::ans::ans_decompress(chunk_data, comb_size)
+                                        .unwrap_or_else(|_| chunk_data.to_vec())
                                 } else if is_dynamic {
-                                    huffman_decompress_dynamic(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
+                                    huffman_decompress_dynamic(chunk_data, comb_size)
+                                        .unwrap_or_else(|_| chunk_data.to_vec())
                                 } else if is_huffman {
-                                    huffman_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
+                                    huffman_decompress(chunk_data, comb_size)
+                                        .unwrap_or_else(|_| chunk_data.to_vec())
                                 } else {
                                     chunk_data.to_vec()
                                 };
@@ -604,40 +658,69 @@ impl MzcGuiApp {
 
                                     if header.version >= VERSION_MZC5 {
                                         while b_pos < b_n && decomp_size < chunk_orig_size {
-                                            if b_pos + 2 > b_n { break; }
-                                            let flag = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap());
+                                            if b_pos + 2 > b_n {
+                                                break;
+                                            }
+                                            let flag = u16::from_le_bytes(
+                                                rle_payload[b_pos..b_pos + 2].try_into().unwrap(),
+                                            );
                                             b_pos += 2;
 
                                             for k in 0..8 {
-                                                if decomp_size >= chunk_orig_size { break; }
+                                                if decomp_size >= chunk_orig_size {
+                                                    break;
+                                                }
                                                 let b_type = ((flag >> (2 * k)) & 0x03) as u8;
                                                 match b_type {
                                                     0x00 => {
-                                                        if b_pos + 2 > b_n { break; }
-                                                        let b_len = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap()) as usize;
+                                                        if b_pos + 2 > b_n {
+                                                            break;
+                                                        }
+                                                        let b_len = u16::from_le_bytes(
+                                                            rle_payload[b_pos..b_pos + 2]
+                                                                .try_into()
+                                                                .unwrap(),
+                                                        )
+                                                            as usize;
                                                         b_pos += 2 + b_len;
                                                         decomp_size += b_len;
                                                         literal_count += 1;
                                                         visual_blocks.push('L');
                                                     }
                                                     0x01 => {
-                                                        if b_pos + 3 > b_n { break; }
-                                                        let b_len = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap()) as usize;
+                                                        if b_pos + 3 > b_n {
+                                                            break;
+                                                        }
+                                                        let b_len = u16::from_le_bytes(
+                                                            rle_payload[b_pos..b_pos + 2]
+                                                                .try_into()
+                                                                .unwrap(),
+                                                        )
+                                                            as usize;
                                                         b_pos += 3;
                                                         decomp_size += b_len;
                                                         run_count += 1;
                                                         visual_blocks.push('R');
                                                     }
                                                     0x02 => {
-                                                        if b_pos + 2 > b_n { break; }
+                                                        if b_pos + 2 > b_n {
+                                                            break;
+                                                        }
                                                         b_pos += 2;
                                                         decomp_size += 2; // 가상 토큰 크기 가정
                                                         token_count += 1;
                                                         visual_blocks.push('T');
                                                     }
                                                     0x03 => {
-                                                        if b_pos + 4 > b_n { break; }
-                                                        let length = u16::from_le_bytes(rle_payload[b_pos + 2..b_pos + 4].try_into().unwrap()) as usize;
+                                                        if b_pos + 4 > b_n {
+                                                            break;
+                                                        }
+                                                        let length = u16::from_le_bytes(
+                                                            rle_payload[b_pos + 2..b_pos + 4]
+                                                                .try_into()
+                                                                .unwrap(),
+                                                        )
+                                                            as usize;
                                                         b_pos += 4;
                                                         decomp_size += length;
                                                         backref_count += 1;
@@ -650,9 +733,16 @@ impl MzcGuiApp {
                                     } else {
                                         // MZC2~MZC4 구버전 RLE 블록 파싱
                                         while b_pos < b_n {
-                                            if b_pos + 3 > b_n { break; }
+                                            if b_pos + 3 > b_n {
+                                                break;
+                                            }
                                             let b_type = rle_payload[b_pos];
-                                            let b_len = u16::from_le_bytes(rle_payload[b_pos + 1..b_pos + 3].try_into().unwrap()) as usize;
+                                            let b_len = u16::from_le_bytes(
+                                                rle_payload[b_pos + 1..b_pos + 3]
+                                                    .try_into()
+                                                    .unwrap(),
+                                            )
+                                                as usize;
                                             b_pos += 3;
 
                                             match b_type {
@@ -707,7 +797,8 @@ impl MzcGuiApp {
                         CompressionMode::Dict => "Dictionary Only Mode",
                         CompressionMode::Hybrid => "Hybrid Mode",
                         CompressionMode::Lz77 => "LZ77 Hybrid Mode",
-                    }.to_string();
+                    }
+                    .to_string();
 
                     match std::fs::write(&saved_path, &final_output) {
                         Ok(_) => {
@@ -741,52 +832,51 @@ impl MzcGuiApp {
     /// **비동기 압축 해제 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
     fn spawn_decompress_task(&self, path: PathBuf, dict_path: Option<PathBuf>) {
         let tx = self.task_sender.clone();
-        std::thread::spawn(move || {
-            match std::fs::read(&path) {
-                Ok(compressed_bytes) => {
-                    let dict_bytes = if let Some(ref d_path) = dict_path {
-                        std::fs::read(d_path).ok()
-                    } else {
-                        None
-                    };
+        std::thread::spawn(move || match std::fs::read(&path) {
+            Ok(compressed_bytes) => {
+                let dict_bytes = if let Some(ref d_path) = dict_path {
+                    std::fs::read(d_path).ok()
+                } else {
+                    None
+                };
 
-                    match crate::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref()) {
-                        Ok(restored_bytes) => {
-                            let restored_size = restored_bytes.len() as u64;
-                            let sha256 = crate::checksum::bytes_to_hex(&calculate_sha256(&restored_bytes));
+                match crate::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref()) {
+                    Ok(restored_bytes) => {
+                        let restored_size = restored_bytes.len() as u64;
+                        let sha256 =
+                            crate::checksum::bytes_to_hex(&calculate_sha256(&restored_bytes));
 
-                            let mut saved_path = path.clone();
-                            let write_res = if crate::archive::is_mzar_archive(&restored_bytes) {
-                                saved_path.set_extension("extracted");
-                                crate::archive::extract_archive(&restored_bytes, &saved_path)
-                                    .map_err(|e| e.to_string())
-                            } else {
-                                saved_path.set_extension("restored.txt");
-                                std::fs::write(&saved_path, &restored_bytes)
-                                    .map_err(|e| e.to_string())
-                            };
+                        let mut saved_path = path.clone();
+                        let write_res = if crate::archive::is_mzar_archive(&restored_bytes) {
+                            saved_path.set_extension("extracted");
+                            crate::archive::extract_archive(&restored_bytes, &saved_path)
+                                .map_err(|e| e.to_string())
+                        } else {
+                            saved_path.set_extension("restored.txt");
+                            std::fs::write(&saved_path, &restored_bytes).map_err(|e| e.to_string())
+                        };
 
-                            match write_res {
-                                Ok(_) => {
-                                    let _ = tx.send(TaskResult::DecompressDone {
-                                        restored_size,
-                                        sha256,
-                                        saved_path,
-                                    });
-                                }
-                                Err(e) => {
-                                    let _ = tx.send(TaskResult::Error(format!("복원 쓰기 에러: {}", e)));
-                                }
+                        match write_res {
+                            Ok(_) => {
+                                let _ = tx.send(TaskResult::DecompressDone {
+                                    restored_size,
+                                    sha256,
+                                    saved_path,
+                                });
+                            }
+                            Err(e) => {
+                                let _ =
+                                    tx.send(TaskResult::Error(format!("복원 쓰기 에러: {}", e)));
                             }
                         }
-                        Err(e) => {
-                            let _ = tx.send(TaskResult::Error(format!("압축 해제 복구 실패: {}", e)));
-                        }
+                    }
+                    Err(e) => {
+                        let _ = tx.send(TaskResult::Error(format!("압축 해제 복구 실패: {}", e)));
                     }
                 }
-                Err(e) => {
-                    let _ = tx.send(TaskResult::Error(format!("압축 데이터 로드 실패: {}", e)));
-                }
+            }
+            Err(e) => {
+                let _ = tx.send(TaskResult::Error(format!("압축 데이터 로드 실패: {}", e)));
             }
         });
     }
@@ -794,291 +884,369 @@ impl MzcGuiApp {
     /// **비동기 분석(Inspect) 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
     fn spawn_inspect_task(&self, path: PathBuf, dict_path: Option<PathBuf>) {
         let tx = self.task_sender.clone();
-        std::thread::spawn(move || {
-            match std::fs::read(&path) {
-                Ok(file_bytes) => {
-                    match MzcHeader::from_bytes(&file_bytes) {
-                        Ok(header) => {
-                            let header_size = if header.version >= VERSION_MZC2 {
-                                HEADER_SIZE_MZC2
-                            } else {
-                                HEADER_SIZE_MZC1
-                            };
+        std::thread::spawn(move || match std::fs::read(&path) {
+            Ok(file_bytes) => match MzcHeader::from_bytes(&file_bytes) {
+                Ok(header) => {
+                    let header_size = if header.version >= VERSION_MZC2 {
+                        HEADER_SIZE_MZC2
+                    } else {
+                        HEADER_SIZE_MZC1
+                    };
 
-                            let dict_bytes = if let Some(ref d_path) = dict_path {
-                                std::fs::read(d_path).ok()
-                            } else {
-                                None
-                            };
+                    let dict_bytes = if let Some(ref d_path) = dict_path {
+                        std::fs::read(d_path).ok()
+                    } else {
+                        None
+                    };
 
-                            let format_desc = if header.version == VERSION_MZC7 {
-                                "MZC7 (Minimal Zip Concept v7 - Context Mixing & Media)"
-                            } else if header.version == VERSION_MZC6 {
-                                "MZC6 (Minimal Zip Concept v6 - ANS Table)"
-                            } else if header.version == VERSION_MZC5 {
-                                "MZC5 (Minimal Zip Concept v5 - Bit-Packed & Preprocessors)"
-                            } else if header.version == VERSION_MZC4 {
-                                "MZC4 (Minimal Zip Concept v4 - Dynamic Huffman)"
-                            } else if header.version == VERSION_MZC3 {
-                                "MZC3 (Minimal Zip Concept v3 - Sliding Window)"
-                            } else if header.version == VERSION_MZC2 {
-                                "MZC2 (Minimal Zip Concept v2 - Parallel Dictionary)"
-                            } else {
-                                "MZC1 (Minimal Zip Concept v1 - Retro RLE)"
-                            };
+                    let format_desc = if header.version == VERSION_MZC7 {
+                        "MZC7 (Minimal Zip Concept v7 - Context Mixing & Media)"
+                    } else if header.version == VERSION_MZC6 {
+                        "MZC6 (Minimal Zip Concept v6 - ANS Table)"
+                    } else if header.version == VERSION_MZC5 {
+                        "MZC5 (Minimal Zip Concept v5 - Bit-Packed & Preprocessors)"
+                    } else if header.version == VERSION_MZC4 {
+                        "MZC4 (Minimal Zip Concept v4 - Dynamic Huffman)"
+                    } else if header.version == VERSION_MZC3 {
+                        "MZC3 (Minimal Zip Concept v3 - Sliding Window)"
+                    } else if header.version == VERSION_MZC2 {
+                        "MZC2 (Minimal Zip Concept v2 - Parallel Dictionary)"
+                    } else {
+                        "MZC1 (Minimal Zip Concept v1 - Retro RLE)"
+                    };
 
-                            let core_alg = if header.version == VERSION_MZC7 {
-                                let core_bits = header.algorithm_type & 0x03;
-                                match core_bits {
-                                    0 => ALGORITHM_RLE,
-                                    1 => ALGORITHM_DICT,
-                                    2 => ALGORITHM_HYBRID,
-                                    3 => ALGORITHM_LZ77,
-                                    _ => unreachable!(),
-                                }
-                            } else if header.version >= VERSION_MZC5 {
-                                header.algorithm_type & 0x0F
-                            } else {
-                                header.algorithm_type
-                            };
+                    let core_alg = if header.version == VERSION_MZC7 {
+                        let core_bits = header.algorithm_type & 0x03;
+                        match core_bits {
+                            0 => ALGORITHM_RLE,
+                            1 => ALGORITHM_DICT,
+                            2 => ALGORITHM_HYBRID,
+                            3 => ALGORITHM_LZ77,
+                            _ => unreachable!(),
+                        }
+                    } else if header.version >= VERSION_MZC5 {
+                        header.algorithm_type & 0x0F
+                    } else {
+                        header.algorithm_type
+                    };
 
-                            let alg_desc = if header.version == VERSION_MZC7 {
-                                let mut desc = match core_alg {
-                                    ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
-                                    ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
-                                    ALGORITHM_HYBRID => "Hybrid Mode (RLE + Dictionary + Huffman)".to_string(),
-                                    ALGORITHM_LZ77 => "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string(),
-                                    _ => "Unknown Mode".to_string(),
-                                };
+                    let alg_desc = if header.version == VERSION_MZC7 {
+                        let mut desc = match core_alg {
+                            ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
+                            ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
+                            ALGORITHM_HYBRID => {
+                                "Hybrid Mode (RLE + Dictionary + Huffman)".to_string()
+                            }
+                            ALGORITHM_LZ77 => {
+                                "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string()
+                            }
+                            _ => "Unknown Mode".to_string(),
+                        };
+                        let entropy_bits = (header.algorithm_type >> 2) & 0x07;
+                        let entropy_name = match entropy_bits {
+                            0 => "None",
+                            1 => "Static Huffman",
+                            2 => "Dynamic Huffman",
+                            3 => "ANS",
+                            4 => "Context Mixing (CM)",
+                            _ => "Unknown",
+                        };
+                        desc.push_str(&format!(" [Entropy: {}]", entropy_name));
+
+                        let filter_bits = (header.algorithm_type >> 5) & 0x07;
+                        let filter_name = match filter_bits {
+                            1 => "Delta",
+                            2 => "BCJ",
+                            3 => "PNG (Paeth)",
+                            4 => "LPC (Audio)",
+                            5 => "Delta + BCJ",
+                            _ => "None",
+                        };
+                        desc.push_str(&format!(" [Filter: {}]", filter_name));
+                        desc
+                    } else if header.version >= VERSION_MZC5 {
+                        let mut desc = match core_alg {
+                            ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
+                            ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
+                            ALGORITHM_HYBRID => {
+                                "Hybrid Mode (RLE + Dictionary + Huffman)".to_string()
+                            }
+                            ALGORITHM_LZ77 => {
+                                "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string()
+                            }
+                            _ => "Unknown Mode".to_string(),
+                        };
+                        let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
+                        let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
+                        if has_delta || has_bcj {
+                            desc.push_str(" [Filters:");
+                            if has_delta {
+                                desc.push_str(" Delta");
+                            }
+                            if has_bcj {
+                                desc.push_str(" BCJ");
+                            }
+                            desc.push_str("]");
+                        }
+                        desc
+                    } else {
+                        match header.algorithm_type {
+                            ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
+                            ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
+                            ALGORITHM_HYBRID => {
+                                "Hybrid Mode (RLE + Dictionary + Huffman)".to_string()
+                            }
+                            ALGORITHM_LZ77 => {
+                                "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string()
+                            }
+                            _ => "Unknown Mode".to_string(),
+                        }
+                    };
+
+                    let payload_bytes = &file_bytes[header_size..];
+                    let mut visual_blocks = Vec::new();
+                    let mut literal_count = 0;
+                    let mut run_count = 0;
+                    let mut token_count = 0;
+                    let mut backref_count = 0;
+
+                    if header.version >= VERSION_MZC2 && header.original_size > 0 {
+                        let mut pos = header.dictionary_size as usize;
+                        let n = payload_bytes.len();
+                        while pos < n {
+                            if pos + 12 > n {
+                                break;
+                            }
+                            let chunk_orig_size =
+                                u32::from_le_bytes(payload_bytes[pos..pos + 4].try_into().unwrap())
+                                    as usize;
+                            let comb_size = u32::from_le_bytes(
+                                payload_bytes[pos + 4..pos + 8].try_into().unwrap(),
+                            ) as usize;
+                            let comp_size = u32::from_le_bytes(
+                                payload_bytes[pos + 8..pos + 12].try_into().unwrap(),
+                            ) as usize;
+                            pos += 12;
+                            if pos + comp_size > n {
+                                break;
+                            }
+
+                            let chunk_data = &payload_bytes[pos..pos + comp_size];
+                            pos += comp_size;
+
+                            let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version
+                                == VERSION_MZC7
+                            {
                                 let entropy_bits = (header.algorithm_type >> 2) & 0x07;
-                                let entropy_name = match entropy_bits {
-                                    0 => "None",
-                                    1 => "Static Huffman",
-                                    2 => "Dynamic Huffman",
-                                    3 => "ANS",
-                                    4 => "Context Mixing (CM)",
-                                    _ => "Unknown",
-                                };
-                                desc.push_str(&format!(" [Entropy: {}]", entropy_name));
-                                
-                                let filter_bits = (header.algorithm_type >> 5) & 0x07;
-                                let filter_name = match filter_bits {
-                                    1 => "Delta",
-                                    2 => "BCJ",
-                                    3 => "PNG (Paeth)",
-                                    4 => "LPC (Audio)",
-                                    5 => "Delta + BCJ",
-                                    _ => "None",
-                                };
-                                desc.push_str(&format!(" [Filter: {}]", filter_name));
-                                desc
-                            } else if header.version >= VERSION_MZC5 {
-                                let mut desc = match core_alg {
-                                    ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
-                                    ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
-                                    ALGORITHM_HYBRID => "Hybrid Mode (RLE + Dictionary + Huffman)".to_string(),
-                                    ALGORITHM_LZ77 => "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string(),
-                                    _ => "Unknown Mode".to_string(),
-                                };
-                                let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
-                                let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
-                                if has_delta || has_bcj {
-                                    desc.push_str(" [Filters:");
-                                    if has_delta { desc.push_str(" Delta"); }
-                                    if has_bcj { desc.push_str(" BCJ"); }
-                                    desc.push_str("]");
-                                }
-                                desc
+                                (
+                                    entropy_bits == 1,
+                                    entropy_bits == 2,
+                                    entropy_bits == 3,
+                                    entropy_bits == 4,
+                                )
                             } else {
-                                match header.algorithm_type {
-                                    ALGORITHM_RLE => "RLE Only (Run-Length Encoding)".to_string(),
-                                    ALGORITHM_DICT => "Dictionary Only (Entropy Enabled)".to_string(),
-                                    ALGORITHM_HYBRID => "Hybrid Mode (RLE + Dictionary + Huffman)".to_string(),
-                                    ALGORITHM_LZ77 => "LZ77 Hybrid (Runs + Dictionary + BackRefs)".to_string(),
-                                    _ => "Unknown Mode".to_string(),
+                                (
+                                    header.version < VERSION_MZC7
+                                        && chunk_data.len() != comb_size
+                                        && (header.version != VERSION_MZC4
+                                            && (header.version < VERSION_MZC5
+                                                || (header.algorithm_type
+                                                    & FILTER_DYNAMIC_HUFFMAN)
+                                                    == 0)
+                                            && (header.version < VERSION_MZC6
+                                                || (header.algorithm_type & FILTER_ANS) == 0)),
+                                    header.version == VERSION_MZC4
+                                        || (header.version >= VERSION_MZC5
+                                            && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN)
+                                                != 0),
+                                    header.version >= VERSION_MZC6
+                                        && (header.algorithm_type & FILTER_ANS) != 0,
+                                    false,
+                                )
+                            };
+
+                            let unhuff = if is_cm {
+                                crate::cm::cm_decompress(chunk_data, comb_size)
+                                    .unwrap_or_else(|_| chunk_data.to_vec())
+                            } else if is_ans {
+                                crate::ans::ans_decompress(chunk_data, comb_size)
+                                    .unwrap_or_else(|_| chunk_data.to_vec())
+                            } else if is_dynamic {
+                                huffman_decompress_dynamic(chunk_data, comb_size)
+                                    .unwrap_or_else(|_| chunk_data.to_vec())
+                            } else if is_huffman {
+                                huffman_decompress(chunk_data, comb_size)
+                                    .unwrap_or_else(|_| chunk_data.to_vec())
+                            } else {
+                                chunk_data.to_vec()
+                            };
+
+                            let (_dict, rle_payload) = if header.dictionary_size > 0 {
+                                let g_dict = if let Some(ref d_bytes) = dict_bytes {
+                                    Dictionary::from_bytes(d_bytes).unwrap_or_default()
+                                } else {
+                                    Dictionary::new()
+                                };
+                                (g_dict, unhuff)
+                            } else {
+                                let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
+                                let dict_bytes_len = dict.to_bytes().len();
+                                if dict_bytes_len < unhuff.len() {
+                                    (dict, unhuff[dict_bytes_len..].to_vec())
+                                } else {
+                                    (dict, Vec::new())
                                 }
                             };
 
-                            let payload_bytes = &file_bytes[header_size..];
-                            let mut visual_blocks = Vec::new();
-                            let mut literal_count = 0;
-                            let mut run_count = 0;
-                            let mut token_count = 0;
-                            let mut backref_count = 0;
+                            if !rle_payload.is_empty() {
+                                let mut b_pos = 0;
+                                let b_n = rle_payload.len();
+                                let mut decomp_size = 0;
 
-                            if header.version >= VERSION_MZC2 && header.original_size > 0 {
-                                let mut pos = header.dictionary_size as usize;
-                                let n = payload_bytes.len();
-                                while pos < n {
-                                    if pos + 12 > n { break; }
-                                    let chunk_orig_size = u32::from_le_bytes(payload_bytes[pos..pos + 4].try_into().unwrap()) as usize;
-                                    let comb_size = u32::from_le_bytes(payload_bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
-                                    let comp_size = u32::from_le_bytes(payload_bytes[pos + 8..pos + 12].try_into().unwrap()) as usize;
-                                    pos += 12;
-                                    if pos + comp_size > n { break; }
-
-                                    let chunk_data = &payload_bytes[pos..pos + comp_size];
-                                    pos += comp_size;
-
-                                    let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
-                                        let entropy_bits = (header.algorithm_type >> 2) & 0x07;
-                                        (
-                                            entropy_bits == 1,
-                                            entropy_bits == 2,
-                                            entropy_bits == 3,
-                                            entropy_bits == 4,
-                                        )
-                                    } else {
-                                        (
-                                            header.version < VERSION_MZC7 && chunk_data.len() != comb_size && (header.version != VERSION_MZC4 && (header.version < VERSION_MZC5 || (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) == 0) && (header.version < VERSION_MZC6 || (header.algorithm_type & FILTER_ANS) == 0)),
-                                            header.version == VERSION_MZC4 || (header.version >= VERSION_MZC5 && (header.algorithm_type & FILTER_DYNAMIC_HUFFMAN) != 0),
-                                            header.version >= VERSION_MZC6 && (header.algorithm_type & FILTER_ANS) != 0,
-                                            false,
-                                        )
-                                    };
-
-                                    let unhuff = if is_cm {
-                                        crate::cm::cm_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
-                                    } else if is_ans {
-                                        crate::ans::ans_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
-                                    } else if is_dynamic {
-                                        huffman_decompress_dynamic(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
-                                    } else if is_huffman {
-                                        huffman_decompress(chunk_data, comb_size).unwrap_or_else(|_| chunk_data.to_vec())
-                                    } else {
-                                        chunk_data.to_vec()
-                                    };
-
-                                    let (_dict, rle_payload) = if header.dictionary_size > 0 {
-                                        let g_dict = if let Some(ref d_bytes) = dict_bytes {
-                                            Dictionary::from_bytes(d_bytes).unwrap_or_default()
-                                        } else {
-                                            Dictionary::new()
-                                        };
-                                        (g_dict, unhuff)
-                                    } else {
-                                        let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
-                                        let dict_bytes_len = dict.to_bytes().len();
-                                        if dict_bytes_len < unhuff.len() {
-                                            (dict, unhuff[dict_bytes_len..].to_vec())
-                                        } else {
-                                            (dict, Vec::new())
+                                if header.version >= VERSION_MZC5 {
+                                    while b_pos < b_n && decomp_size < chunk_orig_size {
+                                        if b_pos + 2 > b_n {
+                                            break;
                                         }
-                                    };
+                                        let flag = u16::from_le_bytes(
+                                            rle_payload[b_pos..b_pos + 2].try_into().unwrap(),
+                                        );
+                                        b_pos += 2;
 
-                                    if !rle_payload.is_empty() {
-                                        let mut b_pos = 0;
-                                        let b_n = rle_payload.len();
-                                        let mut decomp_size = 0;
+                                        for k in 0..8 {
+                                            if decomp_size >= chunk_orig_size {
+                                                break;
+                                            }
+                                            let b_type = ((flag >> (2 * k)) & 0x03) as u8;
+                                            match b_type {
+                                                0x00 => {
+                                                    if b_pos + 2 > b_n {
+                                                        break;
+                                                    }
+                                                    let b_len = u16::from_le_bytes(
+                                                        rle_payload[b_pos..b_pos + 2]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 2 + b_len;
+                                                    decomp_size += b_len;
+                                                    literal_count += 1;
+                                                    visual_blocks.push('L');
+                                                }
+                                                0x01 => {
+                                                    if b_pos + 3 > b_n {
+                                                        break;
+                                                    }
+                                                    let b_len = u16::from_le_bytes(
+                                                        rle_payload[b_pos..b_pos + 2]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 3;
+                                                    decomp_size += b_len;
+                                                    run_count += 1;
+                                                    visual_blocks.push('R');
+                                                }
+                                                0x02 => {
+                                                    if b_pos + 2 > b_n {
+                                                        break;
+                                                    }
+                                                    b_pos += 2;
+                                                    decomp_size += 2;
+                                                    token_count += 1;
+                                                    visual_blocks.push('T');
+                                                }
+                                                0x03 => {
+                                                    if b_pos + 4 > b_n {
+                                                        break;
+                                                    }
+                                                    let length = u16::from_le_bytes(
+                                                        rle_payload[b_pos + 2..b_pos + 4]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 4;
+                                                    decomp_size += length;
+                                                    backref_count += 1;
+                                                    visual_blocks.push('B');
+                                                }
+                                                _ => break,
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    while b_pos < b_n {
+                                        if b_pos + 3 > b_n {
+                                            break;
+                                        }
+                                        let b_type = rle_payload[b_pos];
+                                        let b_len = u16::from_le_bytes(
+                                            rle_payload[b_pos + 1..b_pos + 3].try_into().unwrap(),
+                                        )
+                                            as usize;
+                                        b_pos += 3;
 
-                                        if header.version >= VERSION_MZC5 {
-                                            while b_pos < b_n && decomp_size < chunk_orig_size {
-                                                if b_pos + 2 > b_n { break; }
-                                                let flag = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap());
+                                        match b_type {
+                                            0x00 => {
+                                                literal_count += 1;
+                                                visual_blocks.push('L');
+                                                b_pos += b_len;
+                                            }
+                                            0x01 => {
+                                                run_count += 1;
+                                                visual_blocks.push('R');
+                                                b_pos += 1;
+                                            }
+                                            0x02 => {
+                                                token_count += 1;
+                                                visual_blocks.push('T');
+                                            }
+                                            0x03 => {
+                                                backref_count += 1;
+                                                visual_blocks.push('B');
                                                 b_pos += 2;
-
-                                                for k in 0..8 {
-                                                    if decomp_size >= chunk_orig_size { break; }
-                                                    let b_type = ((flag >> (2 * k)) & 0x03) as u8;
-                                                    match b_type {
-                                                        0x00 => {
-                                                            if b_pos + 2 > b_n { break; }
-                                                            let b_len = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap()) as usize;
-                                                            b_pos += 2 + b_len;
-                                                            decomp_size += b_len;
-                                                            literal_count += 1;
-                                                            visual_blocks.push('L');
-                                                        }
-                                                        0x01 => {
-                                                            if b_pos + 3 > b_n { break; }
-                                                            let b_len = u16::from_le_bytes(rle_payload[b_pos..b_pos + 2].try_into().unwrap()) as usize;
-                                                            b_pos += 3;
-                                                            decomp_size += b_len;
-                                                            run_count += 1;
-                                                            visual_blocks.push('R');
-                                                        }
-                                                        0x02 => {
-                                                            if b_pos + 2 > b_n { break; }
-                                                            b_pos += 2;
-                                                            decomp_size += 2;
-                                                            token_count += 1;
-                                                            visual_blocks.push('T');
-                                                        }
-                                                        0x03 => {
-                                                            if b_pos + 4 > b_n { break; }
-                                                            let length = u16::from_le_bytes(rle_payload[b_pos + 2..b_pos + 4].try_into().unwrap()) as usize;
-                                                            b_pos += 4;
-                                                            decomp_size += length;
-                                                            backref_count += 1;
-                                                            visual_blocks.push('B');
-                                                        }
-                                                        _ => break,
-                                                    }
-                                                }
                                             }
-                                        } else {
-                                            while b_pos < b_n {
-                                                if b_pos + 3 > b_n { break; }
-                                                let b_type = rle_payload[b_pos];
-                                                let b_len = u16::from_le_bytes(rle_payload[b_pos + 1..b_pos + 3].try_into().unwrap()) as usize;
-                                                b_pos += 3;
-
-                                                match b_type {
-                                                    0x00 => {
-                                                        literal_count += 1;
-                                                        visual_blocks.push('L');
-                                                        b_pos += b_len;
-                                                    }
-                                                    0x01 => {
-                                                        run_count += 1;
-                                                        visual_blocks.push('R');
-                                                        b_pos += 1;
-                                                    }
-                                                    0x02 => {
-                                                        token_count += 1;
-                                                        visual_blocks.push('T');
-                                                    }
-                                                    0x03 => {
-                                                        backref_count += 1;
-                                                        visual_blocks.push('B');
-                                                        b_pos += 2;
-                                                    }
-                                                    _ => break,
-                                                }
-                                            }
+                                            _ => break,
                                         }
                                     }
                                 }
                             }
-
-                            let orig_size = header.original_size;
-                            let comp_size = file_bytes.len() as u64;
-                            let ratio = if orig_size > 0 { (comp_size as f64 / orig_size as f64) * 100.0 } else { 100.0 };
-                            let sha256 = crate::checksum::bytes_to_hex(&header.original_sha256);
-
-                            let _ = tx.send(TaskResult::InspectDone {
-                                orig_size,
-                                comp_size,
-                                ratio,
-                                sha256,
-                                verified: true,
-                                visual_blocks,
-                                literal_count,
-                                run_count,
-                                token_count,
-                                backref_count,
-                                format_desc: format_desc.to_string(),
-                                alg_desc,
-                            });
-                        }
-                        Err(e) => {
-                            let _ = tx.send(TaskResult::Error(format!("MZC 헤더 파싱 실패: {}", e)));
                         }
                     }
+
+                    let orig_size = header.original_size;
+                    let comp_size = file_bytes.len() as u64;
+                    let ratio = if orig_size > 0 {
+                        (comp_size as f64 / orig_size as f64) * 100.0
+                    } else {
+                        100.0
+                    };
+                    let sha256 = crate::checksum::bytes_to_hex(&header.original_sha256);
+
+                    let _ = tx.send(TaskResult::InspectDone {
+                        orig_size,
+                        comp_size,
+                        ratio,
+                        sha256,
+                        verified: true,
+                        visual_blocks,
+                        literal_count,
+                        run_count,
+                        token_count,
+                        backref_count,
+                        format_desc: format_desc.to_string(),
+                        alg_desc,
+                    });
                 }
                 Err(e) => {
-                    let _ = tx.send(TaskResult::Error(format!("압축 파일 로드 에러: {}", e)));
+                    let _ = tx.send(TaskResult::Error(format!("MZC 헤더 파싱 실패: {}", e)));
                 }
+            },
+            Err(e) => {
+                let _ = tx.send(TaskResult::Error(format!("압축 파일 로드 에러: {}", e)));
             }
         });
     }
@@ -1094,13 +1262,15 @@ impl MzcGuiApp {
                 }
             }
             if all_bytes.is_empty() {
-                let _ = tx.send(TaskResult::Error("학습 대상 파일 데이터가 비어 있습니다.".to_string()));
+                let _ = tx.send(TaskResult::Error(
+                    "학습 대상 파일 데이터가 비어 있습니다.".to_string(),
+                ));
                 return;
             }
 
             let dict = crate::rle::build_dictionary(&all_bytes);
             let dict_bytes = dict.to_bytes();
-            
+
             match std::fs::write(&output_path, &dict_bytes) {
                 Ok(_) => {
                     let _ = tx.send(TaskResult::TrainDone {
@@ -1120,16 +1290,16 @@ impl MzcGuiApp {
     fn run_tans_simulation(&mut self) {
         self.tans_sim_states.clear();
         self.tans_sim_bits.clear();
-        
+
         let mut x = 32.0; // tANS 가상 디코드 초기 상태 값
-        
+
         for i in 0..100 {
             self.tans_sim_states.push([i as f64, x]);
-            
+
             // 가상 입력 비트 수집
             let bit = (i * 17 + 13) % 2;
             self.tans_sim_bits.push([i as f64, bit as f64]);
-            
+
             // tANS 상태 천이 공식 의태 시뮬레이션
             if bit == 0 {
                 x = (x * 1.35 + 8.0) % 512.0;
@@ -1154,7 +1324,9 @@ impl MzcGuiApp {
                 }
             };
             if data.is_empty() {
-                let _ = sender.send(TaskResult::Error("빈 파일은 벤치마크할 수 없습니다.".to_string()));
+                let _ = sender.send(TaskResult::Error(
+                    "빈 파일은 벤치마크할 수 없습니다.".to_string(),
+                ));
                 return;
             }
 
@@ -1176,7 +1348,8 @@ impl MzcGuiApp {
 
             // 2. Gzip 압축 실행
             let gzip_start = std::time::Instant::now();
-            let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
             use std::io::Write;
             let mut gzip_size = 0;
             let mut gzip_time = 0.0;
@@ -1337,15 +1510,30 @@ impl MzcGuiApp {
 
         let w = self.cm_sim_weights[bit_idx];
         let sum_w = (w[0] + w[1] + w[2] + w[3] + w[4]) as u32;
-        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2 + w[3] as u32 * p3 + w[4] as u32 * p4) / sum_w;
-        if p == 0 { p = 1; } else if p >= 4096 { p = 4095; }
+        let mut p = (w[0] as u32 * p0
+            + w[1] as u32 * p1
+            + w[2] as u32 * p2
+            + w[3] as u32 * p3
+            + w[4] as u32 * p4)
+            / sum_w;
+        if p == 0 {
+            p = 1;
+        } else if p >= 4096 {
+            p = 4095;
+        }
         self.cm_sim_mixed_p = p;
 
         // LMS 오차 가중치 업데이트
         let target = if !bit { 4096i32 } else { 0i32 };
         let err = target - p as i32;
         let err_abs = err.abs();
-        let learning_shift = if err_abs > 2500 { 11 } else if err_abs > 1200 { 12 } else { 13 }; // 시뮬용 학습속도 조율
+        let learning_shift = if err_abs > 2500 {
+            11
+        } else if err_abs > 1200 {
+            12
+        } else {
+            13
+        }; // 시뮬용 학습속도 조율
 
         let mut next_w = w;
         for i in 0..5 {
@@ -1375,7 +1563,12 @@ impl eframe::App for MzcGuiApp {
         // 비동기 작업 채널에서 수신한 비동기 결과를 상태 변수에 연동
         if let Ok(result) = self.task_receiver.try_recv() {
             match result {
-                TaskResult::ChunkProgress { chunk_idx, orig_size, comp_size, duration } => {
+                TaskResult::ChunkProgress {
+                    chunk_idx,
+                    orig_size,
+                    comp_size,
+                    duration,
+                } => {
                     if self.chunk_ratios.len() <= chunk_idx {
                         self.chunk_ratios.resize(chunk_idx + 1, 0.0);
                     }
@@ -1385,8 +1578,16 @@ impl eframe::App for MzcGuiApp {
                     if self.chunk_savings.len() <= chunk_idx {
                         self.chunk_savings.resize(chunk_idx + 1, 0.0);
                     }
-                    let ratio = if orig_size > 0 { (comp_size as f64 / orig_size as f64) * 100.0 } else { 100.0 };
-                    let throughput = if duration > 0.0 { (orig_size as f64 / 1_024_000.0) / duration } else { 0.0 };
+                    let ratio = if orig_size > 0 {
+                        (comp_size as f64 / orig_size as f64) * 100.0
+                    } else {
+                        100.0
+                    };
+                    let throughput = if duration > 0.0 {
+                        (orig_size as f64 / 1_024_000.0) / duration
+                    } else {
+                        0.0
+                    };
                     let savings = (orig_size as f64 - comp_size as f64).max(0.0);
                     self.chunk_ratios[chunk_idx] = ratio;
                     self.chunk_throughputs[chunk_idx] = throughput;
@@ -1396,7 +1597,9 @@ impl eframe::App for MzcGuiApp {
                     self.chunks_completed = chunk_idx + 1;
                     self.throughput_current = throughput;
                     if self.total_chunks_expected > 0 {
-                        self.progress_ratio = (self.chunks_completed as f32 / self.total_chunks_expected as f32).min(0.99);
+                        self.progress_ratio = (self.chunks_completed as f32
+                            / self.total_chunks_expected as f32)
+                            .min(0.99);
                     }
                 }
                 TaskResult::CompressDone {
@@ -1426,23 +1629,37 @@ impl eframe::App for MzcGuiApp {
                     self.verified_ok = true;
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
-                    self.status = format!("압축 성공! 저장됨: {:?}", saved_path.file_name().unwrap_or(saved_path.as_os_str()));
+                    self.status = format!(
+                        "압축 성공! 저장됨: {:?}",
+                        saved_path.file_name().unwrap_or(saved_path.as_os_str())
+                    );
 
                     // 토스트 알림 트리거 및 프로그레스 링 완료
                     self.progress_ratio = 1.0;
-                    self.toast_message = format!("✅ 압축 완료! 원본 {} bytes → {} bytes ({:.1}%)", orig_size, comp_size, ratio);
+                    self.toast_message = format!(
+                        "✅ 압축 완료! 원본 {} bytes → {} bytes ({:.1}%)",
+                        orig_size, comp_size, ratio
+                    );
                     self.toast_start_time = Some(std::time::Instant::now());
                 }
-                TaskResult::DecompressDone { restored_size, sha256, saved_path } => {
+                TaskResult::DecompressDone {
+                    restored_size,
+                    sha256,
+                    saved_path,
+                } => {
                     self.is_processing = false;
                     self.original_size = restored_size;
                     self.sha256_hash = sha256;
                     self.verified_ok = true;
-                    self.status = format!("해제 완료 및 해시 검증 완료! 경로: {:?}", saved_path.file_name().unwrap_or(saved_path.as_os_str()));
+                    self.status = format!(
+                        "해제 완료 및 해시 검증 완료! 경로: {:?}",
+                        saved_path.file_name().unwrap_or(saved_path.as_os_str())
+                    );
 
                     // 토스트 알림 트리거 및 프로그레스 링 완료
                     self.progress_ratio = 1.0;
-                    self.toast_message = format!("🔓 압축 해제 완료! 복원 크기: {} bytes", restored_size);
+                    self.toast_message =
+                        format!("🔓 압축 해제 완료! 복원 크기: {} bytes", restored_size);
                     self.toast_start_time = Some(std::time::Instant::now());
                 }
                 TaskResult::InspectDone {
@@ -1472,12 +1689,17 @@ impl eframe::App for MzcGuiApp {
                     self.backref_count = backref_count;
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
-                    self.status = "압축 데이터 분석 및 체크섬 무손실 검증에 완벽히 성공했습니다!".to_string();
+                    self.status =
+                        "압축 데이터 분석 및 체크섬 무손실 검증에 완벽히 성공했습니다!".to_string();
                 }
-                TaskResult::TrainDone { dict_size, entry_count, saved_path } => {
+                TaskResult::TrainDone {
+                    dict_size,
+                    entry_count,
+                    saved_path,
+                } => {
                     self.is_processing = false;
                     self.train_status = format!(
-                        "사전 생성 성공! 크기: {} bytes, 패턴 개수: {}개\n경로: {:?}", 
+                        "사전 생성 성공! 크기: {} bytes, 패턴 개수: {}개\n경로: {:?}",
                         dict_size, entry_count, saved_path
                     );
                 }
@@ -1563,7 +1785,10 @@ impl eframe::App for MzcGuiApp {
             if let Some(file) = dropped.first() {
                 if let Some(ref path) = file.path {
                     self.input_path = Some(path.clone());
-                    self.status = format!("대상 파일 준비: {:?}", path.file_name().unwrap_or(path.as_os_str()));
+                    self.status = format!(
+                        "대상 파일 준비: {:?}",
+                        path.file_name().unwrap_or(path.as_os_str())
+                    );
                 }
             }
         }
@@ -1579,35 +1804,74 @@ impl eframe::App for MzcGuiApp {
                 ui.group(|ui| {
                     ui.label("🛠 압축 모드 설정");
                     ui.add_space(6.0);
-                    
+
                     ui.label("코어 알고리즘:");
-                    ui.selectable_value(&mut self.compression_mode, CompressionMode::Lz77, "LZ77 슬라이딩윈도우 (MZC3)");
-                    ui.selectable_value(&mut self.compression_mode, CompressionMode::Hybrid, "RLE 하이브리드 (MZC2)");
-                    ui.selectable_value(&mut self.compression_mode, CompressionMode::Rle, "Retro RLE 단독 (MZC1)");
-                    
+                    ui.selectable_value(
+                        &mut self.compression_mode,
+                        CompressionMode::Lz77,
+                        "LZ77 슬라이딩윈도우 (MZC3)",
+                    );
+                    ui.selectable_value(
+                        &mut self.compression_mode,
+                        CompressionMode::Hybrid,
+                        "RLE 하이브리드 (MZC2)",
+                    );
+                    ui.selectable_value(
+                        &mut self.compression_mode,
+                        CompressionMode::Rle,
+                        "Retro RLE 단독 (MZC1)",
+                    );
+
                     ui.add_space(10.0);
                     ui.label("엔트로피 코더 (2차 비트 압축):");
-                    ui.selectable_value(&mut self.entropy_mode, EntropyMode::Cm, "Context Mixing (MZC7)");
-                    ui.selectable_value(&mut self.entropy_mode, EntropyMode::Ans, "tANS 테이블 압축 (MZC6)");
-                    ui.selectable_value(&mut self.entropy_mode, EntropyMode::Dynamic, "동적 허프만 (MZC4)");
-                    ui.selectable_value(&mut self.entropy_mode, EntropyMode::Huffman, "정적 허프만 코딩");
-                    ui.selectable_value(&mut self.entropy_mode, EntropyMode::None, "2차 압축 안함 (None)");
+                    ui.selectable_value(
+                        &mut self.entropy_mode,
+                        EntropyMode::Cm,
+                        "Context Mixing (MZC7)",
+                    );
+                    ui.selectable_value(
+                        &mut self.entropy_mode,
+                        EntropyMode::Ans,
+                        "tANS 테이블 압축 (MZC6)",
+                    );
+                    ui.selectable_value(
+                        &mut self.entropy_mode,
+                        EntropyMode::Dynamic,
+                        "동적 허프만 (MZC4)",
+                    );
+                    ui.selectable_value(
+                        &mut self.entropy_mode,
+                        EntropyMode::Huffman,
+                        "정적 허프만 코딩",
+                    );
+                    ui.selectable_value(
+                        &mut self.entropy_mode,
+                        EntropyMode::None,
+                        "2차 압축 안함 (None)",
+                    );
 
                     ui.add_space(10.0);
                     ui.separator();
                     ui.label("⚡ 고급 전처리 필터 설정:");
-                    
-                    ui.add(egui::Slider::new(&mut self.compression_level, 1..=9).text("압축 레벨 (1-9)"));
-                    
+
+                    ui.add(
+                        egui::Slider::new(&mut self.compression_level, 1..=9)
+                            .text("압축 레벨 (1-9)"),
+                    );
+
                     ui.checkbox(&mut self.png_enabled, "PNG Paeth 필터 (MZC7)");
                     ui.checkbox(&mut self.lpc_enabled, "LPC PCM 오디오 필터 (MZC7)");
                     ui.checkbox(&mut self.delta_enabled, "Delta 차분 필터");
                     ui.checkbox(&mut self.bcj_enabled, "BCJ 기계어 필터");
-                    
+
                     let mut simd_val = self.simd_enabled;
-                    if ui.checkbox(&mut simd_val, "SIMD 하드웨어 가속 활성화").changed() {
+                    if ui
+                        .checkbox(&mut simd_val, "SIMD 하드웨어 가속 활성화")
+                        .changed()
+                    {
                         self.simd_enabled = simd_val;
-                        crate::ENABLE_SIMD.store(self.simd_enabled, std::sync::atomic::Ordering::Relaxed);
+                        crate::ENABLE_SIMD
+                            .store(self.simd_enabled, std::sync::atomic::Ordering::Relaxed);
                     }
 
                     // 상호 배타 필터 충돌 방지 연동 제어
@@ -1627,16 +1891,19 @@ impl eframe::App for MzcGuiApp {
                 ui.group(|ui| {
                     ui.label("📁 전역 공유 사전 설정");
                     ui.add_space(4.0);
-                    
+
                     ui.horizontal(|ui| {
                         if let Some(ref path) = self.dict_path {
-                            let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+                            let name = path
+                                .file_name()
+                                .unwrap_or(path.as_os_str())
+                                .to_string_lossy();
                             ui.label(format!("선택됨: {}", name));
                         } else {
                             ui.label("없음 (로컬 사전)");
                         }
                     });
-                    
+
                     ui.horizontal(|ui| {
                         if ui.button("📁 선택...").clicked() {
                             if let Some(path) = rfd::FileDialog::new().pick_file() {
@@ -1652,7 +1919,7 @@ impl eframe::App for MzcGuiApp {
                 });
 
                 ui.add_space(15.0);
-                
+
                 ui.group(|ui| {
                     ui.label("🚀 엔진 기동 명령");
                     ui.add_space(6.0);
@@ -1661,23 +1928,33 @@ impl eframe::App for MzcGuiApp {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("MZC Compressed File (*.mzc)", &["mzc"])
                             .add_filter("All Files (*.*)", &["*"])
-                            .pick_file() {
+                            .pick_file()
+                        {
                             self.input_path = Some(path.clone());
-                            self.status = format!("선택 파일: {:?}", path.file_name().unwrap_or(path.as_os_str()));
+                            self.status = format!(
+                                "선택 파일: {:?}",
+                                path.file_name().unwrap_or(path.as_os_str())
+                            );
                         }
                     }
 
                     if ui.button("📂 압축 대상 폴더 열기...").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_folder() {
                             self.input_path = Some(path.clone());
-                            self.status = format!("선택 폴더: {:?} (MZAR 아카이브 압축 대상)", path.file_name().unwrap_or(path.as_os_str()));
+                            self.status = format!(
+                                "선택 폴더: {:?} (MZAR 아카이브 압축 대상)",
+                                path.file_name().unwrap_or(path.as_os_str())
+                            );
                         }
                     }
-                    
+
                     ui.add_space(8.0);
 
                     if let Some(ref path) = self.input_path {
-                        let compress_btn = ui.add_enabled(!self.is_processing, egui::Button::new("⚡ 고속 압축 실행"));
+                        let compress_btn = ui.add_enabled(
+                            !self.is_processing,
+                            egui::Button::new("⚡ 고속 압축 실행"),
+                        );
                         if compress_btn.clicked() {
                             self.is_processing = true;
                             self.chunk_ratios.clear();
@@ -1690,11 +1967,14 @@ impl eframe::App for MzcGuiApp {
                             if let Ok(meta) = std::fs::metadata(path) {
                                 let file_size = if meta.is_dir() {
                                     // 폴더인 경우 대략적 추정
-                                    std::fs::read_dir(path).map(|rd| rd.count() as u64 * 50_000).unwrap_or(1_000_000)
+                                    std::fs::read_dir(path)
+                                        .map(|rd| rd.count() as u64 * 50_000)
+                                        .unwrap_or(1_000_000)
                                 } else {
                                     meta.len()
                                 };
-                                self.total_chunks_expected = std::cmp::max(1, (file_size / 262_144) as usize);
+                                self.total_chunks_expected =
+                                    std::cmp::max(1, (file_size / 262_144) as usize);
                             } else {
                                 self.total_chunks_expected = 4;
                             }
@@ -1714,36 +1994,46 @@ impl eframe::App for MzcGuiApp {
 
                         ui.add_space(6.0);
 
-                        let decompress_btn = ui.add_enabled(!self.is_processing, egui::Button::new("🔓 압축 해제 및 복원"));
+                        let decompress_btn = ui.add_enabled(
+                            !self.is_processing,
+                            egui::Button::new("🔓 압축 해제 및 복원"),
+                        );
                         if decompress_btn.clicked() {
                             self.is_processing = true;
                             self.progress_ratio = 0.0;
                             self.throughput_current = 0.0;
                             self.total_chunks_expected = 1;
                             self.chunks_completed = 0;
-                            self.status = "백그라운드에서 역변환 및 체크섬 교차 검사 중...".to_string();
+                            self.status =
+                                "백그라운드에서 역변환 및 체크섬 교차 검사 중...".to_string();
                             self.spawn_decompress_task(path.clone(), self.dict_path.clone());
                         }
 
                         ui.add_space(6.0);
 
-                        let inspect_btn = ui.add_enabled(!self.is_processing, egui::Button::new("🔍 바이너리 구조 정밀 인스펙트"));
+                        let inspect_btn = ui.add_enabled(
+                            !self.is_processing,
+                            egui::Button::new("🔍 바이너리 구조 정밀 인스펙트"),
+                        );
                         if inspect_btn.clicked() {
                             self.is_processing = true;
                             self.status = "MZC 구조화 매직 검출 및 헤더 분석 중...".to_string();
                             self.spawn_inspect_task(path.clone(), self.dict_path.clone());
                         }
                     } else {
-                        ui.colored_label(egui::Color32::from_rgb(180, 180, 180), "압축할 대상 파일을 먼저 선택해 주세요.");
+                        ui.colored_label(
+                            egui::Color32::from_rgb(180, 180, 180),
+                            "압축할 대상 파일을 먼저 선택해 주세요.",
+                        );
                     }
                 });
 
                 ui.add_space(ui.available_height() - 150.0);
-                
+
                 ui.group(|ui| {
                     ui.label("🌐 시스템 & 관리");
                     ui.add_space(4.0);
-                    
+
                     // 우클릭 컨텍스트 메뉴 제어 (Windows 전용)
                     ui.horizontal(|ui| {
                         if ui.button("➕ 우클릭 등록").clicked() {
@@ -1773,12 +2063,21 @@ impl eframe::App for MzcGuiApp {
                             }
                         }
                     });
-                    ui.colored_label(egui::Color32::from_rgb(180, 180, 180), format!("우클릭: {}", self.context_menu_status));
-                    
+                    ui.colored_label(
+                        egui::Color32::from_rgb(180, 180, 180),
+                        format!("우클릭: {}", self.context_menu_status),
+                    );
+
                     ui.add_space(6.0);
-                    
+
                     // 자동 업데이트 확인 버튼
-                    if ui.add_enabled(!self.is_checking_update && !self.is_downloading_update, egui::Button::new("🌐 최신 업데이트 확인")).clicked() {
+                    if ui
+                        .add_enabled(
+                            !self.is_checking_update && !self.is_downloading_update,
+                            egui::Button::new("🌐 최신 업데이트 확인"),
+                        )
+                        .clicked()
+                    {
                         self.is_checking_update = true;
                         self.status = "업데이트 서버에 연결 중...".to_string();
                         self.spawn_check_update_task();
@@ -1791,7 +2090,10 @@ impl eframe::App for MzcGuiApp {
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
                     ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "✔ MZC Core Engine");
-                    ui.colored_label(egui::Color32::from_rgb(120, 120, 120), format!("v{}", env!("CARGO_PKG_VERSION")));
+                    ui.colored_label(
+                        egui::Color32::from_rgb(120, 120, 120),
+                        format!("v{}", env!("CARGO_PKG_VERSION")),
+                    );
                 });
             });
 
@@ -1808,7 +2110,7 @@ impl eframe::App for MzcGuiApp {
             }
 
             ui.add_space(5.0);
-            
+
             // 중앙 패널 상단 멀티 탭 네비게이터 배치
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_tab, 0, "📊 Dashboard (압축 진단 및 실시간 맵)");
@@ -1954,7 +2256,7 @@ impl eframe::App for MzcGuiApp {
                         columns[0].group(|ui| {
                             ui.colored_label(egui::Color32::from_rgb(150, 150, 150), "📁 대상 파일 명세");
                             ui.separator();
-                            
+
                             let filename = match &self.input_path {
                                 Some(p) => p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned(),
                                 None => "지정되지 않음".to_string(),
@@ -1967,7 +2269,7 @@ impl eframe::App for MzcGuiApp {
                         columns[1].group(|ui| {
                             ui.colored_label(egui::Color32::from_rgb(150, 150, 150), "📊 정량적 압축 통계");
                             ui.separator();
-                            
+
                             ui.label(format!("원본 크기: {} bytes", self.original_size));
                             if self.compressed_size > 0 {
                                 ui.label(format!("압축 크기: {} bytes ({:.2}%)", self.compressed_size, self.compression_ratio));
@@ -2023,7 +2325,7 @@ impl eframe::App for MzcGuiApp {
                         });
 
                         ui.separator();
-                        
+
                         let total_blocks = self.literal_count + self.run_count + self.token_count + self.backref_count;
                         if total_blocks > 0 {
                             ui.label(format!(
@@ -2052,7 +2354,7 @@ impl eframe::App for MzcGuiApp {
                         let throughput_points: PlotPoints = self.chunk_throughputs.iter().enumerate()
                             .map(|(i, &t)| [i as f64 + 1.0, t])
                             .collect();
-                        
+
                         let mut cum_sum = 0.0;
                         let savings_points: PlotPoints = self.chunk_savings.iter().enumerate()
                             .map(|(i, &s)| {
@@ -2138,7 +2440,7 @@ impl eframe::App for MzcGuiApp {
                     ui.group(|ui| {
                         ui.label("💾 사전 파일 저장 경로 설정");
                         ui.add_space(4.0);
-                        
+
                         ui.horizontal(|ui| {
                             ui.label(format!("저장 경로: {:?}", self.train_output_path.file_name().unwrap_or(self.train_output_path.as_os_str())));
                             if ui.button("📂 경로 지정...").clicked() {
@@ -2150,7 +2452,7 @@ impl eframe::App for MzcGuiApp {
                     });
 
                     ui.add_space(15.0);
-                    
+
                     ui.horizontal(|ui| {
                         let train_btn = ui.add_enabled(!self.is_processing, egui::Button::new("⚙ 사전 학습 및 생성 개시"));
                         if train_btn.clicked() {
@@ -2495,7 +2797,7 @@ impl eframe::App for MzcGuiApp {
                             ui.colored_label(egui::Color32::from_rgb(41, 121, 255), format!("2차 문맥 확률 (p2): {}", self.cm_sim_probabilities[2]));
                             ui.colored_label(egui::Color32::from_rgb(200, 80, 200), format!("3차 문맥 확률 (p3): {}", self.cm_sim_probabilities[3]));
                             ui.colored_label(egui::Color32::from_rgb(255, 140, 60), format!("비트 문맥 확률 (p4): {}", self.cm_sim_probabilities[4]));
-                            
+
                             ui.add_space(5.0);
                             ui.colored_label(egui::Color32::from_rgb(45, 206, 137), format!("최종 혼합 확률 (p): {}", self.cm_sim_mixed_p));
                         });
@@ -2532,7 +2834,7 @@ impl eframe::App for MzcGuiApp {
                                 egui::vec2(total_width, 32.0),
                                 egui::Sense::hover()
                             );
-                            
+
                             // Draw splitting bar
                             let painter = ui.painter();
                             // Left part (0 bit, probability p)
@@ -2575,7 +2877,7 @@ impl eframe::App for MzcGuiApp {
                 let version = info.version.clone();
                 let url = info.url.clone();
                 let changelog = info.changelog.clone();
-                
+
                 let mut show = true;
                 let mut close_clicked = false;
                 egui::Window::new("🌐 새로운 업데이트 발견")
@@ -2587,17 +2889,20 @@ impl eframe::App for MzcGuiApp {
                         ui.set_max_width(400.0);
                         ui.heading(format!("MZC v{} 출시!", version));
                         ui.add_space(10.0);
-                        
+
                         ui.label("변경 내용:");
                         ui.group(|ui| {
                             ui.label(&changelog);
                         });
                         ui.add_space(15.0);
-                        
+
                         if self.is_downloading_update {
                             ui.horizontal(|ui| {
                                 ui.label("다운로드 중...");
-                                ui.add(egui::ProgressBar::new(self.download_progress).show_percentage());
+                                ui.add(
+                                    egui::ProgressBar::new(self.download_progress)
+                                        .show_percentage(),
+                                );
                             });
                         } else {
                             ui.horizontal(|ui| {
@@ -2663,13 +2968,16 @@ impl eframe::App for MzcGuiApp {
                 );
 
                 // 좌측 액센트 바
-                let accent_rect = egui::Rect::from_min_size(
-                    toast_rect.left_top(),
-                    egui::vec2(4.0, toast_height),
-                );
+                let accent_rect =
+                    egui::Rect::from_min_size(toast_rect.left_top(), egui::vec2(4.0, toast_height));
                 painter.rect_filled(
                     accent_rect,
-                    egui::Rounding { nw: 12.0, sw: 12.0, ne: 0.0, se: 0.0 },
+                    egui::Rounding {
+                        nw: 12.0,
+                        sw: 12.0,
+                        ne: 0.0,
+                        se: 0.0,
+                    },
                     egui::Color32::from_rgba_premultiplied(45, 206, 137, alpha),
                 );
 
@@ -2724,10 +3032,12 @@ impl MzcGuiApp {
 
             ui.horizontal(|ui| {
                 ui.label("Search Window 크기:");
-                let w_resp = ui.add(egui::Slider::new(&mut self.lz77_search_window, 4..=64).text("글자"));
+                let w_resp =
+                    ui.add(egui::Slider::new(&mut self.lz77_search_window, 4..=64).text("글자"));
                 ui.add_space(20.0);
                 ui.label("Look-ahead Buffer 크기:");
-                let l_resp = ui.add(egui::Slider::new(&mut self.lz77_lookahead_window, 3..=16).text("글자"));
+                let l_resp =
+                    ui.add(egui::Slider::new(&mut self.lz77_lookahead_window, 3..=16).text("글자"));
 
                 if w_resp.changed() || l_resp.changed() {
                     self.recalculate_lz77_steps();
@@ -2745,7 +3055,11 @@ impl MzcGuiApp {
         // Playback controls
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label(format!("단계: {} / {}", self.lz77_current_step + 1, self.lz77_steps.len()));
+                ui.label(format!(
+                    "단계: {} / {}",
+                    self.lz77_current_step + 1,
+                    self.lz77_steps.len()
+                ));
 
                 ui.add_space(20.0);
 
@@ -2761,7 +3075,11 @@ impl MzcGuiApp {
                     self.lz77_is_playing = false;
                 }
 
-                let play_lbl = if self.lz77_is_playing { "⏸ 일시정지" } else { "▶ 자동 실행" };
+                let play_lbl = if self.lz77_is_playing {
+                    "⏸ 일시정지"
+                } else {
+                    "▶ 자동 실행"
+                };
                 if ui.button(play_lbl).clicked() {
                     self.lz77_is_playing = !self.lz77_is_playing;
                     self.lz77_last_play_time = std::time::Instant::now();
@@ -2787,16 +3105,18 @@ impl MzcGuiApp {
         // 1. Sliding Window Tape rendering
         ui.label("📟 슬라이딩 윈도우 메모리 그리드");
         let char_vec: Vec<char> = self.lz77_input.chars().collect();
-        
+
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (idx, &c) in char_vec.iter().enumerate() {
-                    let is_search = idx >= step.search_start && idx < step.search_start + step.search_len;
-                    let is_lookahead = idx >= step.lookahead_start && idx < step.lookahead_start + step.lookahead_len;
-                    let is_match = step.match_len > 0 
-                        && idx >= step.cursor - step.match_offset 
+                    let is_search =
+                        idx >= step.search_start && idx < step.search_start + step.search_len;
+                    let is_lookahead = idx >= step.lookahead_start
+                        && idx < step.lookahead_start + step.lookahead_len;
+                    let is_match = step.match_len > 0
+                        && idx >= step.cursor - step.match_offset
                         && idx < step.cursor - step.match_offset + step.match_len;
-                    
+
                     let bg_color = if is_lookahead {
                         egui::Color32::from_rgb(41, 121, 255) // Blue for Look-ahead
                     } else if is_match {
@@ -2807,30 +3127,32 @@ impl MzcGuiApp {
                         egui::Color32::from_rgb(40, 40, 45) // Dark Gray for inactive
                     };
 
-                    let (rect, _response) = ui.allocate_exact_size(
-                        egui::vec2(28.0, 36.0),
-                        egui::Sense::hover()
-                    );
+                    let (rect, _response) =
+                        ui.allocate_exact_size(egui::vec2(28.0, 36.0), egui::Sense::hover());
 
                     let painter = ui.painter();
                     painter.rect_filled(rect, 4.0, bg_color);
-                    
+
                     let text_color = egui::Color32::WHITE;
                     painter.text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         c.to_string(),
                         egui::FontId::monospace(15.0),
-                        text_color
+                        text_color,
                     );
 
                     // Underline index or cursor pointer
                     if idx == step.cursor {
                         let pointer_rect = egui::Rect::from_min_max(
                             egui::pos2(rect.left(), rect.bottom() - 4.0),
-                            egui::pos2(rect.right(), rect.bottom())
+                            egui::pos2(rect.right(), rect.bottom()),
                         );
-                        painter.rect_filled(pointer_rect, 0.0, egui::Color32::from_rgb(255, 60, 60));
+                        painter.rect_filled(
+                            pointer_rect,
+                            0.0,
+                            egui::Color32::from_rgb(255, 60, 60),
+                        );
                     }
                 }
             });
@@ -2853,15 +3175,31 @@ impl MzcGuiApp {
         ui.group(|ui| {
             ui.heading("📝 현재 프레임 분석");
             ui.colored_label(egui::Color32::from_rgb(45, 206, 137), &step.description);
-            
+
             ui.add_space(5.0);
             ui.label(format!(" - 커서 위치 (Cursor): {}", step.cursor));
-            ui.label(format!(" - 검색 버퍼 범위 (Search Buffer): {} ~ {} (길이: {})", step.search_start, step.search_start + step.search_len, step.search_len));
-            ui.label(format!(" - 탐색 버퍼 범위 (Look-ahead Buffer): {} ~ {} (길이: {})", step.lookahead_start, step.lookahead_start + step.lookahead_len, step.lookahead_len));
+            ui.label(format!(
+                " - 검색 버퍼 범위 (Search Buffer): {} ~ {} (길이: {})",
+                step.search_start,
+                step.search_start + step.search_len,
+                step.search_len
+            ));
+            ui.label(format!(
+                " - 탐색 버퍼 범위 (Look-ahead Buffer): {} ~ {} (길이: {})",
+                step.lookahead_start,
+                step.lookahead_start + step.lookahead_len,
+                step.lookahead_len
+            ));
             if step.match_len > 0 {
-                ui.label(format!(" - 출력 토큰 (Token): (오프셋: {}, 길이: {}, 다음문자: \"{}\")", step.match_offset, step.match_len, step.match_char));
+                ui.label(format!(
+                    " - 출력 토큰 (Token): (오프셋: {}, 길이: {}, 다음문자: \"{}\")",
+                    step.match_offset, step.match_len, step.match_char
+                ));
             } else {
-                ui.label(format!(" - 출력 토큰 (Token): (리터럴 문자: \"{}\")", step.match_char));
+                ui.label(format!(
+                    " - 출력 토큰 (Token): (리터럴 문자: \"{}\")",
+                    step.match_char
+                ));
             }
         });
 
@@ -2869,42 +3207,53 @@ impl MzcGuiApp {
 
         // 3. History steps log
         ui.label("📋 생성된 압축 스트림 토큰 이력");
-        egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-            ui.group(|ui| {
-                for (i, st) in self.lz77_steps.iter().enumerate() {
-                    let is_current = i == self.lz77_current_step;
-                    let text_color = if is_current {
-                        egui::Color32::from_rgb(45, 206, 137)
-                    } else {
-                        egui::Color32::from_rgb(180, 180, 180)
-                    };
-
-                    ui.horizontal(|ui| {
-                        if is_current {
-                            ui.colored_label(text_color, "👉");
+        egui::ScrollArea::vertical()
+            .max_height(150.0)
+            .show(ui, |ui| {
+                ui.group(|ui| {
+                    for (i, st) in self.lz77_steps.iter().enumerate() {
+                        let is_current = i == self.lz77_current_step;
+                        let text_color = if is_current {
+                            egui::Color32::from_rgb(45, 206, 137)
                         } else {
-                            ui.label("  ");
-                        }
-                        
-                        let token_repr = if st.match_len > 0 {
-                            format!("<{}, {}, \"{}\">", st.match_offset, st.match_len, st.match_char)
-                        } else {
-                            format!("<0, 0, \"{}\">", st.match_char)
+                            egui::Color32::from_rgb(180, 180, 180)
                         };
 
-                        ui.colored_label(text_color, format!("단계 {:2}:  {}", i + 1, token_repr));
-                        ui.colored_label(egui::Color32::from_rgb(100, 100, 100), &st.description);
-                    });
-                }
+                        ui.horizontal(|ui| {
+                            if is_current {
+                                ui.colored_label(text_color, "👉");
+                            } else {
+                                ui.label("  ");
+                            }
+
+                            let token_repr = if st.match_len > 0 {
+                                format!(
+                                    "<{}, {}, \"{}\">",
+                                    st.match_offset, st.match_len, st.match_char
+                                )
+                            } else {
+                                format!("<0, 0, \"{}\">", st.match_char)
+                            };
+
+                            ui.colored_label(
+                                text_color,
+                                format!("단계 {:2}:  {}", i + 1, token_repr),
+                            );
+                            ui.colored_label(
+                                egui::Color32::from_rgb(100, 100, 100),
+                                &st.description,
+                            );
+                        });
+                    }
+                });
             });
-        });
     }
 
     fn recalculate_lz77_steps(&mut self) {
         let chars: Vec<char> = self.lz77_input.chars().collect();
         let mut steps = Vec::new();
         let mut cursor = 0;
-        
+
         if chars.is_empty() {
             self.lz77_steps = steps;
             self.lz77_current_step = 0;
@@ -2913,14 +3262,14 @@ impl MzcGuiApp {
 
         let w_size = self.lz77_search_window;
         let la_size = self.lz77_lookahead_window;
-        
+
         while cursor < chars.len() {
             let search_start = cursor.saturating_sub(w_size);
             let lookahead_end = std::cmp::min(chars.len(), cursor + la_size);
-            
+
             let mut best_offset = 0;
             let mut best_len = 0;
-            
+
             for i in search_start..cursor {
                 let mut match_len = 0;
                 while cursor + match_len < chars.len() && match_len < la_size {
@@ -2935,7 +3284,7 @@ impl MzcGuiApp {
                     best_offset = cursor - i;
                 }
             }
-            
+
             let (offset, len, next_char) = if best_len >= 2 {
                 let next_c = if cursor + best_len < chars.len() {
                     chars[cursor + best_len].to_string()
@@ -2946,7 +3295,7 @@ impl MzcGuiApp {
             } else {
                 (0, 0, chars[cursor].to_string())
             };
-            
+
             let description = if len > 0 {
                 format!(
                     "일치 발견: 오프셋 {}, 길이 {} (패턴: \"{}\"), 다음 문자: \"{}\"",
@@ -2958,7 +3307,7 @@ impl MzcGuiApp {
             } else {
                 format!("일치 없음: 리터럴 문자 \"{}\" 출력", next_char)
             };
-            
+
             steps.push(Lz77Step {
                 cursor,
                 search_start,
@@ -2970,14 +3319,14 @@ impl MzcGuiApp {
                 match_char: next_char.clone(),
                 description,
             });
-            
+
             if len > 0 {
                 cursor += len + (if !next_char.is_empty() { 1 } else { 0 });
             } else {
                 cursor += 1;
             }
         }
-        
+
         self.lz77_steps = steps;
         self.lz77_current_step = 0;
     }
@@ -2986,7 +3335,7 @@ impl MzcGuiApp {
 fn is_newer_version(new_ver: &str, current_ver: &str) -> bool {
     let new_parts: Vec<&str> = new_ver.split('.').collect();
     let curr_parts: Vec<&str> = current_ver.split('.').collect();
-    
+
     for i in 0..std::cmp::min(new_parts.len(), curr_parts.len()) {
         let n = new_parts[i].parse::<u32>().unwrap_or(0);
         let c = curr_parts[i].parse::<u32>().unwrap_or(0);

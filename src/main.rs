@@ -1,14 +1,14 @@
 mod cli;
 
-use std::fs;
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::fs;
 
 // mzc 라이브러리의 통합 압축/해제 파이프라인과 서브커맨드 인프라를 활용합니다.
 // # Rust 개념 설명:
 // - `mzc::cli::*`: mzc 라이브러리에 선언된 cli 모듈의 유용한 타입들을 가져옵니다.
+use mzc::checksum::{bytes_to_hex, calculate_sha256};
 use mzc::cli::{Cli, Commands};
-use mzc::checksum::{calculate_sha256, bytes_to_hex};
 use mzc::inspect::inspect_mzc_file;
 
 /// **MZC CLI 엔트리포인트 (메인 함수)**
@@ -23,8 +23,19 @@ fn main() -> Result<()> {
     if args.len() == 2 {
         let first_arg = &args[1];
         let subcommands = [
-            "compress", "decompress", "test", "train", "inspect", "inflate", "gui",
-            "register-context-menu", "unregister-context-menu", "-h", "--help", "-V", "--version"
+            "compress",
+            "decompress",
+            "test",
+            "train",
+            "inspect",
+            "inflate",
+            "gui",
+            "register-context-menu",
+            "unregister-context-menu",
+            "-h",
+            "--help",
+            "-V",
+            "--version",
         ];
         if !subcommands.contains(&first_arg.as_str()) {
             let path = std::path::Path::new(first_arg);
@@ -42,17 +53,17 @@ fn main() -> Result<()> {
     // 2. 입력받은 서브커맨드(Commands)에 맞춰 패턴 매칭 분기를 수행합니다.
     match cli.command {
         // --- 압축 (Compress) 서브커맨드 실행 분기 ---
-        Commands::Compress { 
-            input_file, 
-            output_file, 
-            mode, 
-            entropy, 
-            level, 
-            delta, 
-            bcj, 
-            png, 
-            lpc, 
-            dict_file 
+        Commands::Compress {
+            input_file,
+            output_file,
+            mode,
+            entropy,
+            level,
+            delta,
+            bcj,
+            png,
+            lpc,
+            dict_file,
         } => {
             // 출력 파일 경로 자동 추론
             let out_file = match output_file {
@@ -71,12 +82,12 @@ fn main() -> Result<()> {
             };
 
             println!("압축 시작: {:?} -> {:?}", input_file, out_file);
-            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}", 
+            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}",
                      mode, entropy, level, delta, bcj, png, lpc);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
-            
+
             // 원본 파일의 원시 바이트를 로드합니다.
             // 폴더인 경우 MZAR 아카이브 컨테이너로 먼저 패킹(직렬화)을 수행합니다.
             let original_bytes = if input_file.is_dir() {
@@ -87,7 +98,7 @@ fn main() -> Result<()> {
                 fs::read(&input_file)
                     .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_file))?
             };
-            
+
             let original_size = original_bytes.len() as u64;
 
             // 만약 사전 파일 경로가 주어졌다면, 바이트 데이터를 로드합니다.
@@ -104,7 +115,7 @@ fn main() -> Result<()> {
                 use indicatif::{ProgressBar, ProgressStyle};
                 let chunk_size = 1024 * 1024; // 1MB chunks
                 let total_chunks = (original_bytes.len() + chunk_size - 1) / chunk_size;
-                
+
                 println!("대용량 파일 압축 중... (총 {}개 청크)", total_chunks);
                 let pb = ProgressBar::new(total_chunks as u64);
                 pb.set_style(
@@ -113,7 +124,7 @@ fn main() -> Result<()> {
                         .unwrap()
                         .progress_chars("#>-")
                 );
-                
+
                 let pb_clone = pb.clone();
                 let result = mzc::compress_bytes_v2_with_progress_dict(
                     &original_bytes,
@@ -127,7 +138,7 @@ fn main() -> Result<()> {
                     dict_bytes.as_deref(),
                     move |chunk_idx, _total, _, _| {
                         pb_clone.set_position(chunk_idx as u64);
-                    }
+                    },
                 );
                 pb.finish_with_message("압축 완료");
                 result
@@ -146,8 +157,9 @@ fn main() -> Result<()> {
             };
 
             // 최종 압축 파일 디스크에 저장
-            fs::write(&out_file, &final_output)
-                .with_context(|| format!("압축 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
+            fs::write(&out_file, &final_output).with_context(|| {
+                format!("압축 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file)
+            })?;
 
             // 압축 성능 보고
             let total_compressed_size = final_output.len();
@@ -166,7 +178,11 @@ fn main() -> Result<()> {
         }
 
         // --- 압축 해제 (Decompress) 서브커맨드 실행 분기 ---
-        Commands::Decompress { input_file, output_file, dict_file } => {
+        Commands::Decompress {
+            input_file,
+            output_file,
+            dict_file,
+        } => {
             // 출력 파일 경로 자동 추론
             let out_file = match output_file {
                 Some(path) => path,
@@ -204,7 +220,7 @@ fn main() -> Result<()> {
             // 라이브러리의 검증 포함 통합 병렬 청크 압축 해제 파이프라인 구동
             let decompressed_bytes = if compressed_bytes.len() > 100 * 1024 {
                 use indicatif::{ProgressBar, ProgressStyle};
-                
+
                 let pb = ProgressBar::new(100);
                 pb.set_style(
                     ProgressStyle::default_bar()
@@ -212,7 +228,7 @@ fn main() -> Result<()> {
                         .unwrap()
                         .progress_chars("#>-")
                 );
-                
+
                 let pb_clone = pb.clone();
                 let result = mzc::decompress_bytes_v2_with_progress_dict(
                     &compressed_bytes,
@@ -231,12 +247,14 @@ fn main() -> Result<()> {
             // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
             if mzc::archive::is_mzar_archive(&decompressed_bytes) {
                 println!("복원된 바이트에서 MZAR 컨테이너 헤더가 감지되었습니다. 폴더 구조 추출을 시작합니다.");
-                mzc::archive::extract_archive(&decompressed_bytes, &out_file)
-                    .with_context(|| format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file))?;
+                mzc::archive::extract_archive(&decompressed_bytes, &out_file).with_context(
+                    || format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file),
+                )?;
                 println!("디렉토리 아카이브 복원 성공!");
             } else {
-                fs::write(&out_file, &decompressed_bytes)
-                    .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file))?;
+                fs::write(&out_file, &decompressed_bytes).with_context(|| {
+                    format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", out_file)
+                })?;
             }
 
             let restored_hash_hex = bytes_to_hex(&calculate_sha256(&decompressed_bytes));
@@ -248,19 +266,19 @@ fn main() -> Result<()> {
         }
 
         // --- 라운드트립 검증 테스트 (Test) 서브커맨드 실행 분기 ---
-        Commands::Test { 
-            input_file, 
-            mode, 
-            entropy, 
-            level, 
-            delta, 
-            bcj, 
-            png, 
-            lpc, 
-            dict_file 
+        Commands::Test {
+            input_file,
+            mode,
+            entropy,
+            level,
+            delta,
+            bcj,
+            png,
+            lpc,
+            dict_file,
         } => {
             println!("라운드트립 자가 검증 테스트 시작: {:?}", input_file);
-            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}", 
+            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}",
                      mode, entropy, level, delta, bcj, png, lpc);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
@@ -295,8 +313,9 @@ fn main() -> Result<()> {
             let total_compressed_size = compressed_bytes.len();
 
             // 2. 메모리상에서 즉각 해제 및 체크섬 검증
-            let decompressed_bytes = mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
-                .context("인메모리 자가 해제 검증 중 오류가 발생했습니다.")?;
+            let decompressed_bytes =
+                mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
+                    .context("인메모리 자가 해제 검증 중 오류가 발생했습니다.")?;
 
             let ratio = if original_size > 0 {
                 (total_compressed_size as f64 / original_size as f64) * 100.0
@@ -315,14 +334,18 @@ fn main() -> Result<()> {
         }
 
         // --- 공유 사전 생성 학습 (Train) 서브커맨드 실행 분기 ---
-        Commands::Train { input_files, output } => {
+        Commands::Train {
+            input_files,
+            output,
+        } => {
             println!("사전 학습 시작 (총 {}개 파일)...", input_files.len());
-            
+
             let mut all_bytes = Vec::new();
             for file_path in &input_files {
                 println!("학습 대상 파일 로드: {:?}", file_path);
-                let bytes = fs::read(file_path)
-                    .with_context(|| format!("학습용 파일 '{:?}'을 읽을 수 없습니다.", file_path))?;
+                let bytes = fs::read(file_path).with_context(|| {
+                    format!("학습용 파일 '{:?}'을 읽을 수 없습니다.", file_path)
+                })?;
                 all_bytes.extend_from_slice(&bytes);
             }
 
@@ -330,8 +353,12 @@ fn main() -> Result<()> {
             let dict = mzc::rle::build_dictionary(&all_bytes);
             let dict_bytes = dict.to_bytes();
 
-            fs::write(&output, &dict_bytes)
-                .with_context(|| format!("학습된 사전 파일 '{:?}'을 저장하는 데 실패했습니다.", output))?;
+            fs::write(&output, &dict_bytes).with_context(|| {
+                format!(
+                    "학습된 사전 파일 '{:?}'을 저장하는 데 실패했습니다.",
+                    output
+                )
+            })?;
 
             println!("사전 학습 완료!");
             println!("추출된 사전 단어 개수: {}", dict.entries.len());
@@ -345,27 +372,32 @@ fn main() -> Result<()> {
         }
 
         // --- 표준 GZIP / raw DEFLATE 디코더 해제 (Inflate) 서브커맨드 실행 분기 ---
-        Commands::Inflate { input_file, output_file } => {
+        Commands::Inflate {
+            input_file,
+            output_file,
+        } => {
             println!("Inflate 해제 구동: {:?} -> {:?}", input_file, output_file);
-            
+
             let input_bytes = fs::read(&input_file)
                 .with_context(|| format!("입력 파일 '{:?}'을 읽을 수 없습니다.", input_file))?;
 
             // GZIP 매직 2바이트 `1F 8B` 시작 여부에 따라 적절한 디코더 라이브러리를 바인딩합니다.
             let decompressed = if input_bytes.starts_with(&[0x1F, 0x8B]) {
                 println!("GZIP 헤더 포맷 감지. RFC 1952 스펙에 맞춰 GZIP 체크섬 및 페이로드를 해제합니다.");
-                mzc::deflate::gzip_decompress(&input_bytes)
-                    .context("GZIP 압축 해제 오류 발생")?
+                mzc::deflate::gzip_decompress(&input_bytes).context("GZIP 압축 해제 오류 발생")?
             } else {
                 println!("raw DEFLATE 비트스트림 감지. RFC 1951 스펙에 맞춰 동적 허프만 트리를 해제합니다.");
-                mzc::deflate::inflate(&input_bytes)
-                    .context("raw DEFLATE 압축 해제 오류 발생")?
+                mzc::deflate::inflate(&input_bytes).context("raw DEFLATE 압축 해제 오류 발생")?
             };
 
-            fs::write(&output_file, &decompressed)
-                .with_context(|| format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", output_file))?;
+            fs::write(&output_file, &decompressed).with_context(|| {
+                format!("복원 파일 '{:?}'을 저장하는 데 실패했습니다.", output_file)
+            })?;
 
-            println!("압축 해제 및 복구 완료! 복원 파일 크기: {} bytes", decompressed.len());
+            println!(
+                "압축 해제 및 복구 완료! 복원 파일 크기: {} bytes",
+                decompressed.len()
+            );
         }
 
         // --- 데스크톱 그래픽 GUI 애플리케이션 실행 분기 ---

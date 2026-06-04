@@ -1,10 +1,10 @@
-use std::fs;
-use std::time::Instant;
-use std::io::{Write, Read};
-use mzc::cli::{CompressionMode, EntropyMode};
-use flate2::write::GzEncoder;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use flate2::Compression;
+use mzc::cli::{CompressionMode, EntropyMode};
+use std::fs;
+use std::io::{Read, Write};
+use std::time::Instant;
 
 // LCG pseudo-random generator
 fn get_pseudo_random_bytes(seed: &mut u64, len: usize) -> Vec<u8> {
@@ -30,12 +30,12 @@ fn generate_text_dataset() -> Vec<u8> {
     while corpus.len() < 200_000 {
         let template = log_templates[(seed % 4) as usize];
         corpus.extend_from_slice(template.as_bytes());
-        
+
         // Add random values to keep it realistic
         let rand_val = (seed % 1000).to_string();
         corpus.extend_from_slice(rand_val.as_bytes());
         corpus.extend_from_slice(b"\n");
-        
+
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
     }
     corpus.truncate(200_000);
@@ -74,7 +74,7 @@ fn generate_image_dataset() -> Vec<u8> {
 fn generate_executable_dataset() -> Vec<u8> {
     let mut seed = 77777u64;
     let mut data = get_pseudo_random_bytes(&mut seed, 200_000);
-    
+
     // Inject relative jump instructions (0xE8 and 0xE9)
     for i in (0..data.len() - 5).step_by(20) {
         data[i] = if i % 40 == 0 { 0xE8 } else { 0xE9 };
@@ -116,35 +116,68 @@ fn zstd_decompress(data: &[u8], original_len: usize) -> Vec<u8> {
     zstd::bulk::decompress(data, original_len).unwrap()
 }
 
-fn run_bench_on_dataset(
-    name: &str,
-    data: &[u8],
-) -> Vec<BenchResult> {
+fn run_bench_on_dataset(name: &str, data: &[u8]) -> Vec<BenchResult> {
     let mut results = Vec::new();
 
     // Define benchmarks to run
     let test_cases = vec![
-        ("MZC1 (RLE)", CompressionMode::Rle, EntropyMode::None, 6, false, false, false, false),
-        ("MZC3 (LZ77+Static)", CompressionMode::Lz77, EntropyMode::Huffman, 6, false, false, false, false),
-        ("MZC5 (LZ77+Dyn+Filters)", CompressionMode::Lz77, EntropyMode::Dynamic, 6, true, true, false, false),
-        ("MZC6 (tANS)", CompressionMode::Hybrid, EntropyMode::Ans, 6, false, false, false, false),
+        (
+            "MZC1 (RLE)",
+            CompressionMode::Rle,
+            EntropyMode::None,
+            6,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "MZC3 (LZ77+Static)",
+            CompressionMode::Lz77,
+            EntropyMode::Huffman,
+            6,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (
+            "MZC5 (LZ77+Dyn+Filters)",
+            CompressionMode::Lz77,
+            EntropyMode::Dynamic,
+            6,
+            true,
+            true,
+            false,
+            false,
+        ),
+        (
+            "MZC6 (tANS)",
+            CompressionMode::Hybrid,
+            EntropyMode::Ans,
+            6,
+            false,
+            false,
+            false,
+            false,
+        ),
         // MZC7 - customized preprocessor filters depending on dataset
-        ("MZC7 (Context Mixing)", CompressionMode::Hybrid, EntropyMode::Cm, 6, false, false, name == "Image", name == "Audio"),
+        (
+            "MZC7 (Context Mixing)",
+            CompressionMode::Hybrid,
+            EntropyMode::Cm,
+            6,
+            false,
+            false,
+            name == "Image",
+            name == "Audio",
+        ),
     ];
 
     // 1. MZC Coder benchmarks
     for (label, mode, entropy, level, delta, bcj, png, lpc) in test_cases {
         let start_comp = Instant::now();
-        let compressed = mzc::compress_bytes_v2(
-            data,
-            mode,
-            entropy,
-            level,
-            delta,
-            bcj,
-            png,
-            lpc,
-        );
+        let compressed = mzc::compress_bytes_v2(data, mode, entropy, level, delta, bcj, png, lpc);
         let comp_duration = start_comp.elapsed().as_secs_f64() * 1000.0;
 
         let start_decomp = Instant::now();
@@ -224,15 +257,19 @@ fn main() {
     ];
 
     let mut md_report = String::new();
-    md_report.push_str("# MZC vs Industry Standards (Gzip / Zstd) Lossless Compression Benchmark Results\n\n");
+    md_report.push_str(
+        "# MZC vs Industry Standards (Gzip / Zstd) Lossless Compression Benchmark Results\n\n",
+    );
     md_report.push_str("This document contains automatic benchmark evaluation results comparing MZC versions (MZC1 through MZC7) with standard Gzip (RFC 1952) and Zstandard (Zstd) compression engines. All datasets are approximately 200KB in size.\n\n");
 
     for (name, data) in &datasets {
         println!("Benchmarking dataset: {} ({} bytes)...", name, data.len());
         let results = run_bench_on_dataset(name, data);
-        
+
         md_report.push_str(&format!("## Dataset: {} ({} bytes)\n\n", name, data.len()));
-        md_report.push_str("| Format & Mode | Compressed Size | Ratio (%) | Comp Time (ms) | Decomp Time (ms) |\n");
+        md_report.push_str(
+            "| Format & Mode | Compressed Size | Ratio (%) | Comp Time (ms) | Decomp Time (ms) |\n",
+        );
         md_report.push_str("| :--- | :---: | :---: | :---: | :---: |\n");
 
         for res in results {

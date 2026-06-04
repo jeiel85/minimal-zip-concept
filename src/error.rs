@@ -25,10 +25,7 @@ pub enum MzcError {
     OriginalSizeMismatch { expected: u64, found: u64 },
 
     /// 디코딩된 데이터의 SHA-256 체크섬이 헤더에 저장된 원본 해시와 다를 때 발생합니다. (무손실 실패)
-    ChecksumMismatch {
-        expected: String,
-        found: String,
-    },
+    ChecksumMismatch { expected: String, found: String },
 
     /// MZC2 사전 섹션을 파싱하는 도중 데이터가 잘렸거나 레이아웃이 손상되었을 때 발생합니다.
     CorruptDictionary,
@@ -40,7 +37,11 @@ pub enum MzcError {
     HuffmanError { message: String },
 
     /// LZ77 디코딩 시 유효 범위를 벗어나는 백레퍼런스 참조를 감지했을 때 발생합니다.
-    InvalidBackRef { distance: u16, length: u16, current_size: usize },
+    InvalidBackRef {
+        distance: u16,
+        length: u16,
+        current_size: usize,
+    },
 
     /// I/O 시스템에서 발생하는 입출력 에러입니다.
     IoError(String),
@@ -57,10 +58,16 @@ impl fmt::Display for MzcError {
                 write!(f, "파일 헤더가 손상되었습니다. 필요한 헤더 바이트가 부족하며, {read_bytes}바이트만 읽었습니다.")
             }
             MzcError::InvalidMagic { expected, found } => {
-                write!(f, "잘못된 파일 형식 (Magic Header). 기대치: '{expected}', 실제: '{found}'")
+                write!(
+                    f,
+                    "잘못된 파일 형식 (Magic Header). 기대치: '{expected}', 실제: '{found}'"
+                )
             }
             MzcError::InvalidVersion { expected, found } => {
-                write!(f, "지원하지 않는 버전입니다. 기대치: {expected:#04x}, 실제: {found:#04x}")
+                write!(
+                    f,
+                    "지원하지 않는 버전입니다. 기대치: {expected:#04x}, 실제: {found:#04x}"
+                )
             }
             MzcError::InvalidAlgorithm { expected, found } => {
                 write!(f, "지원하지 않는 압축 알고리즘 타입입니다. 기대치: {expected:#04x}, 실제: {found:#04x}")
@@ -86,7 +93,11 @@ impl fmt::Display for MzcError {
             MzcError::HuffmanError { message } => {
                 write!(f, "허프만 엔트로피 디코딩 오류: {message}")
             }
-            MzcError::InvalidBackRef { distance, length, current_size } => {
+            MzcError::InvalidBackRef {
+                distance,
+                length,
+                current_size,
+            } => {
                 write!(f, "유효 범위를 벗어난 LZ77 백레퍼런스 주소 참조 발생! 거리(Distance): {distance}, 길이(Length): {length}, 현재 복원된 데이터 크기: {current_size}")
             }
         }

@@ -1,11 +1,11 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
 
 /// **MZC (Minimal Zip Concept) CLI 도구**
 ///
 /// # Rust 개념 설명:
 /// - `#[derive(Parser)]`: clap 크레이트가 제공하는 자동 생성 매크로입니다.
-///   구조체 내부의 필드를 스캔하여 프로그램 실행 시 명령줄에서 지정하는 인자들을 파싱하고 
+///   구조체 내부의 필드를 스캔하여 프로그램 실행 시 명령줄에서 지정하는 인자들을 파싱하고
 ///   도움말(--help) 화면을 빌드 타임에 자동으로 만들어 주는 도구입니다.
 /// - `#[command(...)]`: 이 프로그램의 이름, 제작자, 버전, 설명 등의 부가 정보를 추가하여 도움말 화면에 출력합니다.
 #[derive(Parser, Debug)]
@@ -26,7 +26,7 @@ pub struct Cli {
 ///
 /// # Rust 개념 설명:
 /// - `#[derive(ValueEnum)]`: clap에서 이 enum의 각 항목 이름을 명령줄 옵션의 문자열로 직접 쓸 수 있도록 매핑해 줍니다.
-/// - `Clone, Copy, Debug, PartialEq, Eq`: 이 열거형의 값들이 대입 복사(`Clone`, `Copy`)가 되고, 
+/// - `Clone, Copy, Debug, PartialEq, Eq`: 이 열거형의 값들이 대입 복사(`Clone`, `Copy`)가 되고,
 ///   출력(`Debug`) 및 비교 연산(`==`, `!=` 등)을 지원하도록 컴파일러에게 지시하는 속성 매크로입니다.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompressionMode {
@@ -58,7 +58,7 @@ pub enum EntropyMode {
 /// **MZC CLI에서 사용할 서브커맨드 목록을 나타내는 열거형(Enum)입니다.**
 ///
 /// # Rust 개념 설명:
-/// - `#[command(...)]`이나 `#[arg(...)]`: clap 크레이트가 제공하는 필드 속성들로, 
+/// - `#[command(...)]`이나 `#[arg(...)]`: clap 크레이트가 제공하는 필드 속성들로,
 ///   긴 인자명(`--long`), 짧은 인자명(`-s`), 기본값(`default_value_t`) 등을 편리하게 지정할 수 있습니다.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
@@ -166,7 +166,12 @@ pub enum Commands {
         input_files: Vec<PathBuf>,
 
         /// 저장할 사전 파일 출력 경로 (예: trained.dict)
-        #[arg(short = 'o', long, value_name = "OUTPUT_FILE", default_value = "trained.dict")]
+        #[arg(
+            short = 'o',
+            long,
+            value_name = "OUTPUT_FILE",
+            default_value = "trained.dict"
+        )]
         output: PathBuf,
     },
 

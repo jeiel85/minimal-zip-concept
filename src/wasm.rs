@@ -30,7 +30,7 @@ pub extern "C" fn wasm_compress(
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
-    
+
     let comp_mode = match mode {
         0 => CompressionMode::Rle,
         1 => CompressionMode::Dict,
@@ -38,7 +38,7 @@ pub extern "C" fn wasm_compress(
         3 => CompressionMode::Lz77,
         _ => CompressionMode::Hybrid,
     };
-    
+
     let ent_mode = match entropy {
         0 => EntropyMode::None,
         1 => EntropyMode::Huffman,
@@ -47,7 +47,7 @@ pub extern "C" fn wasm_compress(
         4 => EntropyMode::Cm,
         _ => EntropyMode::Huffman,
     };
-    
+
     let out_bytes = compress_bytes_v2_dict(
         in_bytes,
         comp_mode,
@@ -59,12 +59,12 @@ pub extern "C" fn wasm_compress(
         lpc != 0,
         None,
     );
-    
+
     let out_len = out_bytes.len();
     unsafe {
         *out_len_ptr = out_len;
     }
-    
+
     let mut out_vec = out_bytes;
     let ptr = out_vec.as_mut_ptr();
     std::mem::forget(out_vec);
@@ -78,7 +78,7 @@ pub extern "C" fn wasm_decompress(
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
-    
+
     match decompress_bytes_v2_dict(in_bytes, None) {
         Ok(decomp) => {
             let out_len = decomp.len();

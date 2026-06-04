@@ -53,12 +53,18 @@ pub fn archive_directory(src_dir: &Path) -> io::Result<Vec<u8>> {
 /// **MZAR 바이트 배열을 파싱하여 지정한 디렉토리에 풀어서 복원합니다.**
 pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> {
     if archive_bytes.len() < 8 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "MZAR 데이터가 너무 짧습니다."));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "MZAR 데이터가 너무 짧습니다.",
+        ));
     }
 
     // 1. Magic bytes 확인
     if &archive_bytes[0..4] != MZAR_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "유효한 MZAR 아카이브가 아닙니다."));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "유효한 MZAR 아카이브가 아닙니다.",
+        ));
     }
 
     // 2. Entry 개수 읽기
@@ -75,26 +81,35 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
 
     for _ in 0..entry_count {
         if cursor + 2 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "엔트리 헤더 읽기 실패: 경량 헤더"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "엔트리 헤더 읽기 실패: 경량 헤더",
+            ));
         }
 
         // 경로 길이 (2B)
         let mut path_len_bytes = [0u8; 2];
-        path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor+2]);
+        path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 2]);
         let path_len = u16::from_le_bytes(path_len_bytes) as usize;
         cursor += 2;
 
         if cursor + path_len > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "상대 경로 바이트 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "상대 경로 바이트 읽기 실패",
+            ));
         }
 
         // 경로명 디코딩
-        let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor+path_len])
+        let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor + path_len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
         cursor += path_len;
 
         if cursor + 9 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "메타데이터 플래그 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "메타데이터 플래그 읽기 실패",
+            ));
         }
 
         // 디렉토리 여부 (1B)
@@ -103,13 +118,13 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
 
         // 파일 크기 (8B)
         let mut file_size_bytes = [0u8; 8];
-        file_size_bytes.copy_from_slice(&archive_bytes[cursor..cursor+8]);
+        file_size_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 8]);
         let file_size = u64::from_le_bytes(file_size_bytes) as usize;
         cursor += 8;
 
         // 타겟 경로 매핑 및 Zip-Slip 보안 취약성 방어
         let target_path = dest_dir.join(path_str);
-        
+
         // zip-slip 방지: 상위 폴더 경로로 탈출하는 공격 방어
         if is_dir {
             fs::create_dir_all(&target_path)?;
@@ -120,14 +135,20 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
         }
 
         // 존재 여부에 따른 부모 디렉토리 canonicalize 검증 우회
-        let canonical_target = if target_path.exists() {
-            target_path.canonicalize()?
-        } else {
-            let parent_canonical = target_path.parent()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "부모 디렉토리가 없습니다."))?
-                .canonicalize()?;
-            parent_canonical.join(target_path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "파일명이 없습니다."))?)
-        };
+        let canonical_target =
+            if target_path.exists() {
+                target_path.canonicalize()?
+            } else {
+                let parent_canonical = target_path
+                    .parent()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "부모 디렉토리가 없습니다.")
+                    })?
+                    .canonicalize()?;
+                parent_canonical.join(target_path.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "파일명이 없습니다.")
+                })?)
+            };
 
         if !canonical_target.starts_with(&canonical_dest) {
             return Err(io::Error::new(
@@ -140,9 +161,12 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
             // 디렉토리 생성 완료
         } else {
             if cursor + file_size > data_len {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "파일 데이터가 잘렸습니다."));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "파일 데이터가 잘렸습니다.",
+                ));
             }
-            let file_data = &archive_bytes[cursor..cursor+file_size];
+            let file_data = &archive_bytes[cursor..cursor + file_size];
             cursor += file_size;
 
             fs::write(&target_path, file_data)?;
@@ -153,13 +177,18 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
 }
 
 /// **디렉토리 재귀 탐색 헬퍼 함수**
-fn collect_entries(base_dir: &Path, current_dir: &Path, entries: &mut Vec<MzarEntry>) -> io::Result<()> {
+fn collect_entries(
+    base_dir: &Path,
+    current_dir: &Path,
+    entries: &mut Vec<MzarEntry>,
+) -> io::Result<()> {
     for entry_res in fs::read_dir(current_dir)? {
         let entry = entry_res?;
         let path = entry.path();
-        
+
         // base_dir 기준 상대 경로 계산
-        let relative_path = path.strip_prefix(base_dir)
+        let relative_path = path
+            .strip_prefix(base_dir)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
             .to_string_lossy()
             .replace('\\', "/"); // OS 범용 호환을 위해 슬래시 통일

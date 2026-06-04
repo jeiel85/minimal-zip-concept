@@ -31,7 +31,14 @@ impl CmModel {
     }
 
     /// **현재 문맥 상태를 바탕으로 다음 비트가 '0'일 확률을 0 ~ 4096 범위의 정수로 예측합니다.**
-    pub fn get_probability(&self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8, prev_byte_3: u8, bit_idx: usize) -> u32 {
+    pub fn get_probability(
+        &self,
+        ctx_byte: u16,
+        prev_byte_1: u8,
+        prev_byte_2: u8,
+        prev_byte_3: u8,
+        bit_idx: usize,
+    ) -> u32 {
         // 1. Context 0 (0차 예측 - 비트 경로)
         let idx0 = ctx_byte as usize;
         let (n0_0, n0_1) = self.c0_table[idx0];
@@ -43,24 +50,37 @@ impl CmModel {
         let p1 = ((n1_0 as u32 + 1) * 4096) / (n1_0 as u32 + n1_1 as u32 + 2);
 
         // 3. Context 2 (2차 문맥 예측 - 직전 2바이트 + 비트 경로 해시)
-        let hash_val = (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C2_SIZE;
+        let hash_val =
+            (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize))
+                % C2_SIZE;
         let (n2_0, n2_1) = self.c2_table[hash_val];
         let p2 = ((n2_0 as u32 + 1) * 4096) / (n2_0 as u32 + n2_1 as u32 + 2);
 
         // 4. Context 3 (3차 문맥 예측 - 직전 3바이트 + 비트 경로 해시)
-        let hash_val_3 = (((prev_byte_3 as usize) << 24) | ((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C3_SIZE;
+        let hash_val_3 = (((prev_byte_3 as usize) << 24)
+            | ((prev_byte_2 as usize) << 16)
+            | ((prev_byte_1 as usize) << 8)
+            | (ctx_byte as usize))
+            % C3_SIZE;
         let (n3_0, n3_1) = self.c3_table[hash_val_3];
         let p3 = ((n3_0 as u32 + 1) * 4096) / (n3_0 as u32 + n3_1 as u32 + 2);
 
         // 5. Sparse Context (직전 바이트 XOR 조합 + 비트 경로 해시)
-        let hash_sparse = ((((prev_byte_1 as usize) ^ (prev_byte_2 as usize)) << 8) | (ctx_byte as usize)) % CSPARSE_SIZE;
+        let hash_sparse = ((((prev_byte_1 as usize) ^ (prev_byte_2 as usize)) << 8)
+            | (ctx_byte as usize))
+            % CSPARSE_SIZE;
         let (n4_0, n4_1) = self.c_sparse_table[hash_sparse];
         let p4 = ((n4_0 as u32 + 1) * 4096) / (n4_0 as u32 + n4_1 as u32 + 2);
 
         // 6. 확률 혼합 (LMS Adaptive Mixing)
         let w = self.weights[bit_idx];
         let sum_w = (w[0] + w[1] + w[2] + w[3] + w[4]) as u32;
-        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2 + w[3] as u32 * p3 + w[4] as u32 * p4) / sum_w;
+        let mut p = (w[0] as u32 * p0
+            + w[1] as u32 * p1
+            + w[2] as u32 * p2
+            + w[3] as u32 * p3
+            + w[4] as u32 * p4)
+            / sum_w;
 
         if p == 0 {
             p = 1;
@@ -71,7 +91,15 @@ impl CmModel {
     }
 
     /// **실제 비트 결과를 통해 통계 모델과 LMS 가중치를 적응적으로 동적 업데이트합니다.**
-    pub fn update(&mut self, ctx_byte: u16, prev_byte_1: u8, prev_byte_2: u8, prev_byte_3: u8, bit_idx: usize, bit: bool) {
+    pub fn update(
+        &mut self,
+        ctx_byte: u16,
+        prev_byte_1: u8,
+        prev_byte_2: u8,
+        prev_byte_3: u8,
+        bit_idx: usize,
+        bit: bool,
+    ) {
         // 개별 확률 재계산
         let idx0 = ctx_byte as usize;
         let (n0_0, n0_1) = self.c0_table[idx0];
@@ -81,21 +109,34 @@ impl CmModel {
         let (n1_0, n1_1) = self.c1_table[idx1];
         let p1 = ((n1_0 as u32 + 1) * 4096) / (n1_0 as u32 + n1_1 as u32 + 2);
 
-        let hash_val = (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C2_SIZE;
+        let hash_val =
+            (((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize))
+                % C2_SIZE;
         let (n2_0, n2_1) = self.c2_table[hash_val];
         let p2 = ((n2_0 as u32 + 1) * 4096) / (n2_0 as u32 + n2_1 as u32 + 2);
 
-        let hash_val_3 = (((prev_byte_3 as usize) << 24) | ((prev_byte_2 as usize) << 16) | ((prev_byte_1 as usize) << 8) | (ctx_byte as usize)) % C3_SIZE;
+        let hash_val_3 = (((prev_byte_3 as usize) << 24)
+            | ((prev_byte_2 as usize) << 16)
+            | ((prev_byte_1 as usize) << 8)
+            | (ctx_byte as usize))
+            % C3_SIZE;
         let (n3_0, n3_1) = self.c3_table[hash_val_3];
         let p3 = ((n3_0 as u32 + 1) * 4096) / (n3_0 as u32 + n3_1 as u32 + 2);
 
-        let hash_sparse = ((((prev_byte_1 as usize) ^ (prev_byte_2 as usize)) << 8) | (ctx_byte as usize)) % CSPARSE_SIZE;
+        let hash_sparse = ((((prev_byte_1 as usize) ^ (prev_byte_2 as usize)) << 8)
+            | (ctx_byte as usize))
+            % CSPARSE_SIZE;
         let (n4_0, n4_1) = self.c_sparse_table[hash_sparse];
         let p4 = ((n4_0 as u32 + 1) * 4096) / (n4_0 as u32 + n4_1 as u32 + 2);
 
         let w = self.weights[bit_idx];
         let sum_w = (w[0] + w[1] + w[2] + w[3] + w[4]) as u32;
-        let mut p = (w[0] as u32 * p0 + w[1] as u32 * p1 + w[2] as u32 * p2 + w[3] as u32 * p3 + w[4] as u32 * p4) / sum_w;
+        let mut p = (w[0] as u32 * p0
+            + w[1] as u32 * p1
+            + w[2] as u32 * p2
+            + w[3] as u32 * p3
+            + w[4] as u32 * p4)
+            / sum_w;
         if p == 0 {
             p = 1;
         } else if p >= 4096 {
@@ -106,7 +147,7 @@ impl CmModel {
         let target = if !bit { 4096i32 } else { 0i32 };
         let err = target - p as i32;
         let err_abs = err.abs();
-        
+
         // 예측이 크게 빗나갔을 때 빠르게 적응하고, 잘 들어맞을 때 학습 진폭을 낮춤
         let learning_shift = if err_abs > 2500 {
             13
@@ -133,9 +174,13 @@ impl CmModel {
 
         let update_entry = |c: &mut (u8, u8), bit_val: bool| {
             if !bit_val {
-                if c.0 < 255 { c.0 += 1; }
+                if c.0 < 255 {
+                    c.0 += 1;
+                }
             } else {
-                if c.1 < 255 { c.1 += 1; }
+                if c.1 < 255 {
+                    c.1 += 1;
+                }
             }
             if c.0 as u16 + c.1 as u16 > 120 {
                 c.0 = (c.0 >> 1).max(1);
@@ -191,7 +236,8 @@ impl RangeEncoder {
             c = c.wrapping_add((self.low >> 32) as u8);
             self.out.push(c);
             for _ in 0..self.cache_size - 1 {
-                self.out.push(if self.low >= 0x01_0000_0000 { 0 } else { 0xFF });
+                self.out
+                    .push(if self.low >= 0x01_0000_0000 { 0 } else { 0xFF });
             }
             self.cache = next_byte;
             self.cache_size = 1;
@@ -219,7 +265,10 @@ struct RangeDecoder<'a> {
 impl<'a> RangeDecoder<'a> {
     fn new(bytes: &'a [u8]) -> Result<Self, MzcError> {
         if bytes.len() < 5 {
-            return Err(MzcError::TruncatedBlock { expected: 5, found: bytes.len() });
+            return Err(MzcError::TruncatedBlock {
+                expected: 5,
+                found: bytes.len(),
+            });
         }
         let mut dec = Self {
             range: 0xFFFF_FFFF,
@@ -228,7 +277,11 @@ impl<'a> RangeDecoder<'a> {
             pos: 0,
         };
         for _ in 0..5 {
-            let b = if dec.pos < bytes.len() { bytes[dec.pos] } else { 0 };
+            let b = if dec.pos < bytes.len() {
+                bytes[dec.pos]
+            } else {
+                0
+            };
             dec.code = (dec.code << 8) | b as u32;
             dec.pos += 1;
         }
@@ -240,7 +293,11 @@ impl<'a> RangeDecoder<'a> {
         if self.code < boundary {
             self.range = boundary;
             while self.range < 0x0100_0000 {
-                let b = if self.pos < self.bytes.len() { self.bytes[self.pos] } else { 0 };
+                let b = if self.pos < self.bytes.len() {
+                    self.bytes[self.pos]
+                } else {
+                    0
+                };
                 self.code = (self.code << 8) | b as u32;
                 self.range <<= 8;
                 self.pos += 1;
@@ -250,7 +307,11 @@ impl<'a> RangeDecoder<'a> {
             self.range -= boundary;
             self.code -= boundary;
             while self.range < 0x0100_0000 {
-                let b = if self.pos < self.bytes.len() { self.bytes[self.pos] } else { 0 };
+                let b = if self.pos < self.bytes.len() {
+                    self.bytes[self.pos]
+                } else {
+                    0
+                };
                 self.code = (self.code << 8) | b as u32;
                 self.range <<= 8;
                 self.pos += 1;
@@ -274,11 +335,18 @@ pub fn cm_compress(data: &[u8]) -> Result<Vec<u8>, MzcError> {
         for i in (0..8).rev() {
             let bit = ((byte >> i) & 1) != 0;
             let bit_idx = (7 - i) as usize;
-            
+
             let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
             encoder.encode_bit(bit, p);
-            model.update(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx, bit);
-            
+            model.update(
+                ctx_byte,
+                prev_byte_1,
+                prev_byte_2,
+                prev_byte_3,
+                bit_idx,
+                bit,
+            );
+
             ctx_byte = (ctx_byte << 1) | (bit as u16);
         }
         prev_byte_3 = prev_byte_2;
@@ -302,7 +370,7 @@ pub fn cm_decompress(cm_bytes: &[u8], original_size: usize) -> Result<Vec<u8>, M
     let mut prev_byte_1 = 0u8;
     let mut prev_byte_2 = 0u8;
     let mut prev_byte_3 = 0u8;
-    
+
     let mut out = Vec::with_capacity(original_size);
 
     for _ in 0..original_size {
@@ -310,16 +378,23 @@ pub fn cm_decompress(cm_bytes: &[u8], original_size: usize) -> Result<Vec<u8>, M
         let mut ctx_byte = 1u16;
         for i in 0..8 {
             let bit_idx = i;
-            
+
             let p = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
             let bit = decoder.decode_bit(p);
-            
+
             byte = (byte << 1) | (bit as u8);
-            model.update(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx, bit);
+            model.update(
+                ctx_byte,
+                prev_byte_1,
+                prev_byte_2,
+                prev_byte_3,
+                bit_idx,
+                bit,
+            );
             ctx_byte = (ctx_byte << 1) | (bit as u16);
         }
         out.push(byte);
-        
+
         prev_byte_3 = prev_byte_2;
         prev_byte_2 = prev_byte_1;
         prev_byte_1 = byte;
