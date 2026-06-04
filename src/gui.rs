@@ -633,7 +633,7 @@ impl MzcGuiApp {
 
                     // 파일 저장
                     let mut saved_path = path.clone();
-                    saved_path.set_extension("mzip");
+                    saved_path.set_extension("mzc");
 
                     let format_desc = if version_mzc7 {
                         "MZC7 - Context Mixing & Media Filters Spec".to_string()
@@ -1498,7 +1498,7 @@ impl eframe::App for MzcGuiApp {
 
                     if ui.button("📁 압축 대상 파일 열기...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("MZIP Compressed File (*.mzip)", &["mzip"])
+                            .add_filter("MZC Compressed File (*.mzc)", &["mzc"])
                             .add_filter("All Files (*.*)", &["*"])
                             .pick_file() {
                             self.input_path = Some(path.clone());

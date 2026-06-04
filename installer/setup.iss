@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "MZC"
-#define MyAppVersion "0.8.0"
+#define MyAppVersion "0.9.0"
 #define MyAppPublisher "Antigravity"
 #define MyAppURL "https://github.com/jeiel85/minimal-zip-concept"
 #define MyAppExeName "mzc.exe"

@@ -42,10 +42,10 @@ fn main() -> Result<()> {
                     let mut path = input_file.clone();
                     if let Some(ext) = path.extension() {
                         let mut new_ext = ext.to_os_string();
-                        new_ext.push(".mzip");
+                        new_ext.push(".mzc");
                         path.set_extension(new_ext);
                     } else {
-                        path.set_extension("mzip");
+                        path.set_extension("mzc");
                     }
                     path
                 }
@@ -120,8 +120,8 @@ fn main() -> Result<()> {
                 Some(path) => path,
                 None => {
                     let mut path = input_file.clone();
-                    if path.extension().map_or(false, |ext| ext == "mzip") {
-                        path.set_extension(""); // Remove .mzip extension
+                    if path.extension().map_or(false, |ext| ext == "mzc") {
+                        path.set_extension(""); // Remove .mzc extension
                     } else {
                         let mut new_ext = path.extension().unwrap_or_default().to_os_string();
                         new_ext.push(".extracted");
@@ -151,7 +151,7 @@ fn main() -> Result<()> {
 
             // 라이브러리의 검증 포함 통합 병렬 청크 압축 해제 파이프라인 구동
             let decompressed_bytes = mzc::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref())
-                .context("MZIP 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
+                .context("MZC 압축 파일 해제 및 검증 과정에서 오류가 발생했습니다.")?;
 
             // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
             if mzc::archive::is_mzar_archive(&decompressed_bytes) {

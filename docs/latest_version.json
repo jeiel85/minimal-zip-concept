@@ -1,5 +1,5 @@
 {
-  "version": "0.8.0",
-  "url": "https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.8.0/mzc-setup.exe",
-  "changelog": "- MZC 확장자를 .mzip 포맷으로 단일 통합하여 직관적 압축 정체성 강화\n- Windows 우클릭 컨텍스트 메뉴(압축하기/해제하기) GUI/CLI 일관 지원\n- GUI 내 자동 업데이트 기능 및 Inno Setup 기반 간편 설치 지원"
+  "version": "0.9.0",
+  "url": "https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.9.0/mzc-setup.exe",
+  "changelog": "- MZC 확장자를 .mzc 포맷으로 단일 통합하여 직관적 압축 정체성 강화\n- Windows 우클릭 컨텍스트 메뉴(압축하기/해제하기) GUI/CLI 일관 지원\n- GUI 내 자동 업데이트 기능 및 Inno Setup 기반 간편 설치 지원"
 }

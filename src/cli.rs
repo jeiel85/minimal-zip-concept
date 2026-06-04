@@ -12,8 +12,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "mzc",
     author = "Antigravity",
-    version = "0.8.0",
-    about = "Minimal Zip Concept - RLE, 사전, LZ77 및 Context Mixing 기반 고도화 무손실 압축 CLI 도구 (MZIP 포맷)",
+    version = "0.9.0",
+    about = "Minimal Zip Concept - RLE, 사전, LZ77 및 Context Mixing 기반 고도화 무손실 압축 CLI 도구 (MZC 포맷)",
     long_about = "MZC는 압축 알고리즘의 원리를 공부하고 직접 구현해 보는 Rust 학습용 무손실 압축 프로그램입니다."
 )]
 pub struct Cli {
@@ -62,13 +62,13 @@ pub enum EntropyMode {
 ///   긴 인자명(`--long`), 짧은 인자명(`-s`), 기본값(`default_value_t`) 등을 편리하게 지정할 수 있습니다.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// 원본 파일을 MZIP 압축 파일로 변환합니다.
+    /// 원본 파일을 MZC 압축 파일로 변환합니다.
     Compress {
         /// 압축할 원본 파일의 경로
         #[arg(value_name = "INPUT_FILE")]
         input_file: PathBuf,
 
-        /// 생성할 압축 파일의 출력 경로 (생략 시 원래 파일명에 .mzip가 붙어 자동 생성됨)
+        /// 생성할 압축 파일의 출력 경로 (생략 시 원래 파일명에 .mzc가 붙어 자동 생성됨)
         #[arg(value_name = "OUTPUT_FILE")]
         output_file: Option<PathBuf>,
 
@@ -105,13 +105,13 @@ pub enum Commands {
         dict_file: Option<PathBuf>,
     },
 
-    /// MZIP 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
+    /// MZC 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
     Decompress {
-        /// 압축이 되어 있는 MZIP 파일 경로
+        /// 압축이 되어 있는 MZC 파일 경로
         #[arg(value_name = "INPUT_FILE")]
         input_file: PathBuf,
 
-        /// 압축을 해제하여 복원해 낼 출력 경로 (생략 시 .mzip 확장자가 제거되어 자동 생성됨)
+        /// 압축을 해제하여 복원해 낼 출력 경로 (생략 시 .mzc 확장자가 제거되어 자동 생성됨)
         #[arg(value_name = "OUTPUT_FILE")]
         output_file: Option<PathBuf>,
 
@@ -170,9 +170,9 @@ pub enum Commands {
         output: PathBuf,
     },
 
-    /// MZIP 압축 파일을 읽어 헤더 명세와 압축율, 그리고 내장된 SHA-256 해시를 상세히 분석하여 출력합니다.
+    /// MZC 압축 파일을 읽어 헤더 명세와 압축율, 그리고 내장된 SHA-256 해시를 상세히 분석하여 출력합니다.
     Inspect {
-        /// 분석을 수행할 대상 MZIP 압축 파일 경로
+        /// 분석을 수행할 대상 MZC 압축 파일 경로
         #[arg(value_name = "INPUT_FILE")]
         input_file: PathBuf,
     },

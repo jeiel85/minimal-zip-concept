@@ -1115,9 +1115,9 @@ pub fn register_context_menu() -> anyhow::Result<()> {
     run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress", "Icon", &exe_str)?;
     run_reg_add(r"HKCU\Software\Classes\Directory\shell\MzcCompress\command", "", &format!("\"{}\" compress \"%1\"", exe_str))?;
 
-    // 3. .mzip 확장자 등록 및 우클릭 시 "MZC로 압축 해제하기" 추가
-    run_reg_add(r"HKCU\Software\Classes\.mzip", "", "MzcArchive")?;
-    run_reg_add(r"HKCU\Software\Classes\MzcArchive", "", "MZIP 압축 파일")?;
+    // 3. .mzc 확장자 등록 및 우클릭 시 "MZC로 압축 해제하기" 추가
+    run_reg_add(r"HKCU\Software\Classes\.mzc", "", "MzcArchive")?;
+    run_reg_add(r"HKCU\Software\Classes\MzcArchive", "", "MZC 압축 파일")?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "", "MZC로 압축 해제하기")?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open", "Icon", &exe_str)?;
     run_reg_add(r"HKCU\Software\Classes\MzcArchive\shell\open\command", "", &format!("\"{}\" decompress \"%1\"", exe_str))?;
@@ -1158,7 +1158,7 @@ fn run_reg_add(key: &str, val_name: &str, val: &str) -> anyhow::Result<()> {
 pub fn unregister_context_menu() -> anyhow::Result<()> {
     run_reg_delete(r"HKCU\Software\Classes\*\shell\MzcCompress")?;
     run_reg_delete(r"HKCU\Software\Classes\Directory\shell\MzcCompress")?;
-    run_reg_delete(r"HKCU\Software\Classes\.mzip")?;
+    run_reg_delete(r"HKCU\Software\Classes\.mzc")?;
     run_reg_delete(r"HKCU\Software\Classes\MzcArchive")?;
     println!("윈도우 마우스 우클릭 메뉴가 성공적으로 해제되었습니다.");
     Ok(())
