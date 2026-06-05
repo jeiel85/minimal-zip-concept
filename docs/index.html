@@ -1043,6 +1043,15 @@
                         </div>
 
                         <div class="options-group">
+                            <label class="options-label">전역 공유 사전 파일 (.dict)</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="file" id="dict-upload" accept=".dict" class="select-input" style="padding: 4px; font-size: 13px; flex-grow: 1;">
+                                <button id="clear-dict-btn" class="btn btn-secondary" style="padding: 8px 12px; font-size: 12px; margin: 0; display: none; min-width: auto; height: auto;">Clear</button>
+                            </div>
+                            <div id="dict-info" style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">사전 로드되지 않음 (압축/해제 시 자동 적용)</div>
+                        </div>
+
+                        <div class="options-group">
                             <label class="options-label">압축 레벨 (Compression Level: 1-9)</label>
                             <div class="range-slider-container">
                                 <input type="range" id="level-slider" class="range-slider" min="1" max="9" value="3">
@@ -1538,12 +1547,22 @@
             wasmInstance.exports.wasm_free(ptr, len);
         }
 
+        let uploadedDictData = null;
+
         function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc, bwt = false) {
             if (!wasmInstance) return null;
             
             const { ptr: inPtr, len: inLen } = allocUint8Array(data);
             const outLenPtr = wasmInstance.exports.wasm_alloc(4); // 32-bit pointer (4 bytes)
             
+            let dictPtr = 0;
+            let dictLen = 0;
+            if (uploadedDictData) {
+                const res = allocUint8Array(uploadedDictData);
+                dictPtr = res.ptr;
+                dictLen = res.len;
+            }
+
             const outPtr = wasmInstance.exports.wasm_compress(
                 inPtr,
                 inLen,
@@ -1555,6 +1574,8 @@
                 png ? 1 : 0,
                 lpc ? 1 : 0,
                 bwt ? 1 : 0,
+                dictPtr,
+                dictLen,
                 outLenPtr
             );
             
@@ -1564,6 +1585,7 @@
             if (outPtr === 0 || outLen === 0) {
                 freePtr(inPtr, inLen);
                 freePtr(outLenPtr, 4);
+                if (dictPtr !== 0) freePtr(dictPtr, dictLen);
                 return null;
             }
             
@@ -1573,6 +1595,7 @@
             freePtr(inPtr, inLen);
             freePtr(outLenPtr, 4);
             freePtr(outPtr, outLen);
+            if (dictPtr !== 0) freePtr(dictPtr, dictLen);
             
             return result;
         }
@@ -1583,9 +1606,19 @@
             const { ptr: inPtr, len: inLen } = allocUint8Array(data);
             const outLenPtr = wasmInstance.exports.wasm_alloc(4);
             
+            let dictPtr = 0;
+            let dictLen = 0;
+            if (uploadedDictData) {
+                const res = allocUint8Array(uploadedDictData);
+                dictPtr = res.ptr;
+                dictLen = res.len;
+            }
+
             const outPtr = wasmInstance.exports.wasm_decompress(
                 inPtr,
                 inLen,
+                dictPtr,
+                dictLen,
                 outLenPtr
             );
             
@@ -1595,6 +1628,7 @@
             if (outPtr === 0 || outLen === 0) {
                 freePtr(inPtr, inLen);
                 freePtr(outLenPtr, 4);
+                if (dictPtr !== 0) freePtr(dictPtr, dictLen);
                 return null;
             }
             
@@ -1604,6 +1638,7 @@
             freePtr(inPtr, inLen);
             freePtr(outLenPtr, 4);
             freePtr(outPtr, outLen);
+            if (dictPtr !== 0) freePtr(dictPtr, dictLen);
             
             return result;
         }
@@ -1624,6 +1659,38 @@
 
         levelSlider.addEventListener("input", (e) => {
             levelVal.textContent = e.target.value;
+        });
+
+        // Dictionary upload handling
+        const dictUpload = document.getElementById("dict-upload");
+        const clearDictBtn = document.getElementById("clear-dict-btn");
+        const dictInfo = document.getElementById("dict-info");
+
+        dictUpload.addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                uploadedDictData = new Uint8Array(event.target.result);
+                dictInfo.textContent = `사전 로드 완료: ${file.name} (${(uploadedDictData.length / 1024).toFixed(2)} KB)`;
+                dictInfo.style.color = "var(--primary)";
+                clearDictBtn.style.display = "block";
+                logToTerminal(`사용자 사전 파일이 로드되었습니다: ${file.name} (${uploadedDictData.length} bytes)`, "info");
+            };
+            reader.onerror = () => {
+                logToTerminal("사전 파일 읽기 실패", "warn");
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        clearDictBtn.addEventListener("click", () => {
+            uploadedDictData = null;
+            dictUpload.value = "";
+            dictInfo.textContent = "사전 로드되지 않음 (압축/해제 시 자동 적용)";
+            dictInfo.style.color = "var(--text-dim)";
+            clearDictBtn.style.display = "none";
+            logToTerminal("사용자 사전이 해제되었습니다.", "info");
         });
 
         // Drop zone interaction

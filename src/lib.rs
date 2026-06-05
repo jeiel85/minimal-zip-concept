@@ -772,73 +772,75 @@ where
                 ALGORITHM_HYBRID
             };
 
+            // 안전한 DISJOINT 쓰기 복사 및 스트리밍 해제
+            let dest_slice = unsafe {
+                std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size)
+            };
+
             // RLE / LZ77 블록 압축 해제 복원
             let filter_bits = if header.version == VERSION_MZC7 {
                 (header.algorithm_type >> 5) & 0x07
             } else {
                 0
             };
-            let target_size = if filter_bits == 6 {
-                chunk_orig_size + 4
-            } else {
-                chunk_orig_size
-            };
 
-            let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
-                rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_flag, target_size)?
-            } else {
-                rle_decompress_hybrid(&rle_payload, &dict, alg_flag, target_size)?
-            };
+            if filter_bits == 6 {
+                // BWT는 target_size = chunk_orig_size + 4 이므로 버퍼 오버플로우 방지를 위해 임시 벡터 사용
+                let target_size = chunk_orig_size + 4;
+                let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
+                    rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_flag, target_size)?
+                } else {
+                    rle_decompress_hybrid(&rle_payload, &dict, alg_flag, target_size)?
+                };
 
-            // 역전처리 필터 적용 (인코딩의 역순)
-            if header.version == VERSION_MZC7 {
-                let filter_bits = (header.algorithm_type >> 5) & 0x07;
-                match filter_bits {
-                    1 => {
-                        rle::inverse_delta_filter(&mut decompressed_chunk);
-                    }
-                    2 => {
-                        rle::inverse_bcj_filter(&mut decompressed_chunk);
-                    }
-                    3 => {
-                        filters::inverse_png_filter(&mut decompressed_chunk);
-                    }
-                    4 => {
-                        filters::inverse_lpc_filter(&mut decompressed_chunk);
-                    }
-                    5 => {
-                        // Delta + BCJ 적용된 역연산
-                        rle::inverse_delta_filter(&mut decompressed_chunk);
-                        rle::inverse_bcj_filter(&mut decompressed_chunk);
-                    }
-                    6 => {
-                        filters::inverse_bwt_filter(&mut decompressed_chunk);
-                    }
-                    _ => {}
+                filters::inverse_bwt_filter(&mut decompressed_chunk);
+
+                if decompressed_chunk.len() != chunk_orig_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: chunk_orig_size as u64,
+                        found: decompressed_chunk.len() as u64,
+                    });
                 }
-            } else if header.version >= VERSION_MZC5 {
-                let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
-                let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
-                if has_delta {
-                    rle::inverse_delta_filter(&mut decompressed_chunk);
-                }
-                if has_bcj {
-                    rle::inverse_bcj_filter(&mut decompressed_chunk);
-                }
-            }
-
-            // 개별 청크 원본 크기 교차 검증
-            if decompressed_chunk.len() != chunk_orig_size {
-                return Err(MzcError::OriginalSizeMismatch {
-                    expected: chunk_orig_size as u64,
-                    found: decompressed_chunk.len() as u64,
-                });
-            }
-
-            // 안전한 DISJOINT 쓰기 복사
-            unsafe {
-                let dest_slice = std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size);
                 dest_slice.copy_from_slice(&decompressed_chunk);
+            } else {
+                // BWT 이외의 필터는 임시 할당 없이 dest_slice에 직접 해제
+                if header.version >= VERSION_MZC5 {
+                    rle::rle_decompress_hybrid_mzc5_slice(&rle_payload, &dict, alg_flag, dest_slice)?;
+                } else {
+                    rle::rle_decompress_hybrid_slice(&rle_payload, &dict, alg_flag, dest_slice)?;
+                }
+
+                // 역필터를 dest_slice 상에서 인플레이스로 수행
+                if header.version == VERSION_MZC7 {
+                    match filter_bits {
+                        1 => {
+                            rle::inverse_delta_filter(dest_slice);
+                        }
+                        2 => {
+                            rle::inverse_bcj_filter(dest_slice);
+                        }
+                        3 => {
+                            filters::inverse_png_filter(dest_slice);
+                        }
+                        4 => {
+                            filters::inverse_lpc_filter(dest_slice);
+                        }
+                        5 => {
+                            rle::inverse_delta_filter(dest_slice);
+                            rle::inverse_bcj_filter(dest_slice);
+                        }
+                        _ => {}
+                    }
+                } else if header.version >= VERSION_MZC5 {
+                    let has_delta = (header.algorithm_type & FILTER_DELTA) != 0;
+                    let has_bcj = (header.algorithm_type & FILTER_BCJ) != 0;
+                    if has_delta {
+                        rle::inverse_delta_filter(dest_slice);
+                    }
+                    if has_bcj {
+                        rle::inverse_bcj_filter(dest_slice);
+                    }
+                }
             }
 
             let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;

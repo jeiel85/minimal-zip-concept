@@ -28,9 +28,16 @@ pub extern "C" fn wasm_compress(
     png: u8,
     lpc: u8,
     bwt: u8,
+    dict_ptr: *const u8,
+    dict_len: usize,
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
+    let dict_bytes = if !dict_ptr.is_null() && dict_len > 0 {
+        Some(unsafe { std::slice::from_raw_parts(dict_ptr, dict_len) })
+    } else {
+        None
+    };
 
     let comp_mode = match mode {
         0 => CompressionMode::Rle,
@@ -59,7 +66,7 @@ pub extern "C" fn wasm_compress(
         png != 0,
         lpc != 0,
         bwt != 0,
-        None,
+        dict_bytes,
         |_, _, _, _| {},
     );
 
@@ -78,11 +85,18 @@ pub extern "C" fn wasm_compress(
 pub extern "C" fn wasm_decompress(
     in_ptr: *const u8,
     in_len: usize,
+    dict_ptr: *const u8,
+    dict_len: usize,
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
+    let dict_bytes = if !dict_ptr.is_null() && dict_len > 0 {
+        Some(unsafe { std::slice::from_raw_parts(dict_ptr, dict_len) })
+    } else {
+        None
+    };
 
-    match decompress_bytes_v2_dict(in_bytes, None) {
+    match decompress_bytes_v2_dict(in_bytes, dict_bytes) {
         Ok(decomp) => {
             let out_len = decomp.len();
             unsafe {

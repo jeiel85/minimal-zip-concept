@@ -31,6 +31,10 @@ jobs:
             target: x86_64-apple-darwin
             artifact_name: mzc-macos-x64
             asset_type: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: mzc-macos-arm64
+            asset_type: tar.gz
 
     steps:
     - name: Checkout repository
@@ -72,6 +76,28 @@ jobs:
         mkdir dist
         cp target/${{ matrix.target }}/release/mzc dist/
         tar -czf ${{ matrix.artifact_name }}.tar.gz -C dist mzc
+        
+        # Build Debian package for x64 Linux
+        if [ "${{ matrix.target }}" = "x86_64-unknown-linux-gnu" ]; then
+          mkdir -p debian/DEBIAN
+          mkdir -p debian/usr/bin
+          cp target/${{ matrix.target }}/release/mzc debian/usr/bin/
+          
+          # Extract version from tag (e.g. v0.11.1 -> 0.11.1)
+          VERSION_DEB=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+          
+          cat <<EOF > debian/DEBIAN/control
+Package: mzc
+Version: ${VERSION_DEB}
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: jeiel
+Description: Minimal Zip Concept (MZC) compression utility
+EOF
+          
+          dpkg-deb --build debian mzc_${VERSION_DEB}_amd64.deb
+        fi
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
@@ -80,6 +106,7 @@ jobs:
         path: |
           *.zip
           *.tar.gz
+          *.deb
           mzc-setup.exe
         if-no-files-found: ignore
 
@@ -100,6 +127,7 @@ jobs:
         files: |
           */*.tar.gz
           */*.zip
+          */*.deb
           */mzc-setup.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1317,3 +1317,400 @@ pub fn rle_decompress(payload: &[u8]) -> Result<Vec<u8>, MzcError> {
 
     Ok(decompressed)
 }
+
+/// MZC2 하이브리드 블록 스트림 페이로드를 읽어와 pre-allocated out_slice 버퍼에 직접 복원합니다.
+pub fn rle_decompress_hybrid_slice(
+    payload: &[u8],
+    dict: &Dictionary,
+    algorithm_type: u8,
+    out: &mut [u8],
+) -> Result<(), MzcError> {
+    let max_size = out.len();
+    let mut write_pos = 0;
+    let mut pos = 0;
+    let n = payload.len();
+
+    while pos < n {
+        if pos + 3 > n {
+            return Err(MzcError::TruncatedBlock {
+                expected: 3,
+                found: n - pos,
+            });
+        }
+
+        let block_type = payload[pos];
+        let len_bytes: [u8; 2] = payload[pos + 1..pos + 3]
+            .try_into()
+            .expect("블록 크기 u16 변환");
+        let block_len = u16::from_le_bytes(len_bytes) as usize;
+        pos += 3;
+
+        match block_type {
+            BLOCK_TYPE_LITERAL => {
+                if write_pos + block_len > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + block_len) as u64,
+                    });
+                }
+                if pos + block_len > n {
+                    return Err(MzcError::TruncatedBlock {
+                        expected: block_len,
+                        found: n - pos,
+                    });
+                }
+                out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                write_pos += block_len;
+                pos += block_len;
+            }
+            BLOCK_TYPE_RUN => {
+                if algorithm_type == ALGORITHM_DICT {
+                    return Err(MzcError::InvalidAlgorithm {
+                        expected: ALGORITHM_HYBRID,
+                        found: ALGORITHM_DICT,
+                    });
+                }
+                if write_pos + block_len > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + block_len) as u64,
+                    });
+                }
+
+                if pos + 1 > n {
+                    return Err(MzcError::TruncatedBlock {
+                        expected: 1,
+                        found: n - pos,
+                    });
+                }
+                let value = payload[pos];
+                pos += 1;
+                out[write_pos..write_pos + block_len].fill(value);
+                write_pos += block_len;
+            }
+            BLOCK_TYPE_TOKEN => {
+                if algorithm_type == ALGORITHM_RLE {
+                    return Err(MzcError::InvalidAlgorithm {
+                        expected: ALGORITHM_HYBRID,
+                        found: ALGORITHM_RLE,
+                    });
+                }
+
+                let token_idx = block_len;
+                if token_idx >= dict.entries.len() {
+                    return Err(MzcError::InvalidTokenIndex {
+                        index: token_idx as u16,
+                        max_valid: dict.entries.len() as u16,
+                    });
+                }
+
+                let entry = &dict.entries[token_idx];
+                if write_pos + entry.len() > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + entry.len()) as u64,
+                    });
+                }
+                out[write_pos..write_pos + entry.len()].copy_from_slice(entry);
+                write_pos += entry.len();
+            }
+            BLOCK_TYPE_BACKREF => {
+                if algorithm_type == ALGORITHM_RLE || algorithm_type == ALGORITHM_DICT {
+                    return Err(MzcError::InvalidAlgorithm {
+                        expected: ALGORITHM_LZ77,
+                        found: algorithm_type,
+                    });
+                }
+
+                if pos + 2 > n {
+                    return Err(MzcError::TruncatedBlock {
+                        expected: 2,
+                        found: n - pos,
+                    });
+                }
+
+                let dist = block_len;
+                let len_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+                let length = u16::from_le_bytes(len_bytes) as usize;
+                pos += 2;
+
+                if write_pos + length > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + length) as u64,
+                    });
+                }
+
+                if dist == 0 || dist > write_pos {
+                    return Err(MzcError::InvalidBackRef {
+                        distance: dist as u16,
+                        length: length as u16,
+                        current_size: write_pos,
+                    });
+                }
+
+                let start_idx = write_pos - dist;
+                for offset in 0..length {
+                    out[write_pos + offset] = out[start_idx + offset];
+                }
+                write_pos += length;
+            }
+            _ => {
+                return Err(MzcError::UnknownBlockType { found: block_type });
+            }
+        }
+    }
+
+    if write_pos != max_size {
+        return Err(MzcError::OriginalSizeMismatch {
+            expected: max_size as u64,
+            found: write_pos as u64,
+        });
+    }
+    Ok(())
+}
+
+/// MZC5 하이브리드 비트 플래그 스트림 페이로드를 읽어와 pre-allocated out_slice 버퍼에 직접 복원합니다.
+pub fn rle_decompress_hybrid_mzc5_slice(
+    payload: &[u8],
+    dict: &Dictionary,
+    algorithm_type: u8,
+    out: &mut [u8],
+) -> Result<(), MzcError> {
+    let chunk_orig_size = out.len();
+    let mut write_pos = 0;
+    let mut pos = 0;
+    let n = payload.len();
+
+    while write_pos < chunk_orig_size {
+        if pos + 2 > n {
+            return Err(MzcError::TruncatedBlock {
+                expected: 2,
+                found: n - pos,
+            });
+        }
+
+        let flag_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+        let flag = u16::from_le_bytes(flag_bytes);
+        pos += 2;
+
+        for k in 0..8 {
+            if write_pos >= chunk_orig_size {
+                break;
+            }
+
+            let block_type = ((flag >> (2 * k)) & 0x03) as u8;
+            match block_type {
+                BLOCK_TYPE_LITERAL => {
+                    if pos + 2 > n {
+                        return Err(MzcError::TruncatedBlock {
+                            expected: 2,
+                            found: n - pos,
+                        });
+                    }
+                    let len_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+                    let block_len = u16::from_le_bytes(len_bytes) as usize;
+                    pos += 2;
+
+                    if write_pos + block_len > chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: (write_pos + block_len) as u64,
+                        });
+                    }
+
+                    if pos + block_len > n {
+                        return Err(MzcError::TruncatedBlock {
+                            expected: block_len,
+                            found: n - pos,
+                        });
+                    }
+                    out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                    write_pos += block_len;
+                    pos += block_len;
+                }
+                BLOCK_TYPE_RUN => {
+                    if algorithm_type == ALGORITHM_DICT {
+                        return Err(MzcError::InvalidAlgorithm {
+                            expected: ALGORITHM_HYBRID,
+                            found: ALGORITHM_DICT,
+                        });
+                    }
+
+                    if pos + 3 > n {
+                        return Err(MzcError::TruncatedBlock {
+                            expected: 3,
+                            found: n - pos,
+                        });
+                    }
+                    let count_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+                    let count = u16::from_le_bytes(count_bytes) as usize;
+                    let value = payload[pos + 2];
+                    pos += 3;
+
+                    if write_pos + count > chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: (write_pos + count) as u64,
+                        });
+                    }
+
+                    out[write_pos..write_pos + count].fill(value);
+                    write_pos += count;
+                }
+                BLOCK_TYPE_TOKEN => {
+                    if algorithm_type == ALGORITHM_RLE {
+                        return Err(MzcError::InvalidAlgorithm {
+                            expected: ALGORITHM_HYBRID,
+                            found: ALGORITHM_RLE,
+                        });
+                    }
+
+                    if pos + 2 > n {
+                        return Err(MzcError::TruncatedBlock {
+                            expected: 2,
+                            found: n - pos,
+                        });
+                    }
+                    let idx_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+                    let token_idx = u16::from_le_bytes(idx_bytes) as usize;
+                    pos += 2;
+
+                    if token_idx >= dict.entries.len() {
+                        return Err(MzcError::InvalidTokenIndex {
+                            index: token_idx as u16,
+                            max_valid: dict.entries.len() as u16,
+                        });
+                    }
+
+                    let entry = &dict.entries[token_idx];
+                    if write_pos + entry.len() > chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: (write_pos + entry.len()) as u64,
+                        });
+                    }
+                    out[write_pos..write_pos + entry.len()].copy_from_slice(entry);
+                    write_pos += entry.len();
+                }
+                BLOCK_TYPE_BACKREF => {
+                    if algorithm_type == ALGORITHM_RLE || algorithm_type == ALGORITHM_DICT {
+                        return Err(MzcError::InvalidAlgorithm {
+                            expected: ALGORITHM_LZ77,
+                            found: algorithm_type,
+                        });
+                    }
+
+                    if pos + 4 > n {
+                        return Err(MzcError::TruncatedBlock {
+                            expected: 4,
+                            found: n - pos,
+                        });
+                    }
+
+                    let dist_bytes: [u8; 2] = payload[pos..pos + 2].try_into().unwrap();
+                    let dist = u16::from_le_bytes(dist_bytes) as usize;
+                    let len_bytes: [u8; 2] = payload[pos + 2..pos + 4].try_into().unwrap();
+                    let length = u16::from_le_bytes(len_bytes) as usize;
+                    pos += 4;
+
+                    if write_pos + length > chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: (write_pos + length) as u64,
+                        });
+                    }
+
+                    if dist == 0 || dist > write_pos {
+                        return Err(MzcError::InvalidBackRef {
+                            distance: dist as u16,
+                            length: length as u16,
+                            current_size: write_pos,
+                        });
+                    }
+
+                    let start_idx = write_pos - dist;
+                    for offset in 0..length {
+                        out[write_pos + offset] = out[start_idx + offset];
+                    }
+                    write_pos += length;
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// MZC1 포맷의 압축 페일로드 바이트 슬라이스를 pre-allocated out_slice 버퍼에 직접 복원합니다.
+pub fn rle_decompress_slice(payload: &[u8], out: &mut [u8]) -> Result<(), MzcError> {
+    let max_size = out.len();
+    let mut write_pos = 0;
+    let mut pos = 0;
+    let n = payload.len();
+
+    while pos < n {
+        if pos + 3 > n {
+            return Err(MzcError::TruncatedBlock {
+                expected: 3,
+                found: n - pos,
+            });
+        }
+
+        let block_type = payload[pos];
+        let len_bytes: [u8; 2] = payload[pos + 1..pos + 3]
+            .try_into()
+            .expect("u16 파싱용 2바이트 슬라이스 변환");
+        let block_len = u16::from_le_bytes(len_bytes) as usize;
+        pos += 3;
+
+        match block_type {
+            BLOCK_TYPE_LITERAL => {
+                if write_pos + block_len > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + block_len) as u64,
+                    });
+                }
+                if pos + block_len > n {
+                    return Err(MzcError::TruncatedBlock {
+                        expected: block_len,
+                        found: n - pos,
+                    });
+                }
+                out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                write_pos += block_len;
+                pos += block_len;
+            }
+            BLOCK_TYPE_RUN => {
+                if write_pos + block_len > max_size {
+                    return Err(MzcError::OriginalSizeMismatch {
+                        expected: max_size as u64,
+                        found: (write_pos + block_len) as u64,
+                    });
+                }
+                if pos + 1 > n {
+                    return Err(MzcError::TruncatedBlock {
+                        expected: 1,
+                        found: n - pos,
+                    });
+                }
+                let value = payload[pos];
+                pos += 1;
+                out[write_pos..write_pos + block_len].fill(value);
+                write_pos += block_len;
+            }
+            _ => {
+                return Err(MzcError::UnknownBlockType { found: block_type });
+            }
+        }
+    }
+
+    if write_pos != max_size {
+        return Err(MzcError::OriginalSizeMismatch {
+            expected: max_size as u64,
+            found: write_pos as u64,
+        });
+    }
+    Ok(())
+}
