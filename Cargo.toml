@@ -41,3 +41,11 @@ zstd = "0.13.3"
 
 [build-dependencies]
 embed-resource = "2.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "compression_bench"
+harness = false
+

@@ -1201,6 +1201,7 @@
             <div style="display:flex; justify-content:center; gap:16px; margin-bottom: 24px;">
                 <button id="tab-tans-btn" class="tab-btn active" onclick="switchSimTab('tans')">📈 tANS 시뮬레이션</button>
                 <button id="tab-cm-btn" class="tab-btn" onclick="switchSimTab('cm')">🔬 Context Mixing 시뮬레이션</button>
+                <button id="tab-lpc-btn" class="tab-btn" onclick="switchSimTab('lpc')">🎵 LPC 오디오 필터 시뮬레이션</button>
             </div>
 
             <!-- tANS Tab Content -->
@@ -1320,6 +1321,70 @@
                         <div style="flex:1; display:flex; align-items:center; justify-content:center;">
                             1-영역 (1 - Mixed p)
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- LPC Tab Content -->
+            <div id="sim-lpc-panel" class="demo-card" style="display: none;">
+                <h3 style="margin-bottom: 12px; font-weight:600; color:var(--accent);">LPC (선형 예측 부호화) 및 잔차(Residual) 분석기</h3>
+                <p style="font-size:14px; color:var(--text-muted); margin-bottom:20px;">
+                    오디오 압축(MZC6)에서 사용되는 LPC 필터 시뮬레이션입니다. 오디오 샘플 간의 선형 상관관계를 분석하여 예측하고, 오직 예측 오차(잔차) 값만 엔트로피 코더로 전달하여 극적인 압축률 향상을 얻는 메커니즘을 시각적으로 확인해 보세요.
+                </p>
+
+                <div class="demo-actions" style="margin-bottom: 20px; justify-content: center; gap: 16px; flex-wrap: wrap;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <label for="lpc-wave-type" class="options-label" style="margin-bottom:0;">입력 파형:</label>
+                        <select id="lpc-wave-type" onchange="runLpcSimulation()" style="background:#1c1d22; color:#fff; border:1px solid var(--border); border-radius:4px; padding:6px 12px; font-size:14px;">
+                            <option value="sine">단순 사인파 (Sine Wave)</option>
+                            <option value="harmonic">배음 합성파 (Harmonic Wave)</option>
+                            <option value="voice">목소리 파형 (Low-pass Noise)</option>
+                        </select>
+                    </div>
+
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <label for="lpc-order" class="options-label" style="margin-bottom:0;">LPC 차수 (Order):</label>
+                        <input type="range" id="lpc-order" min="2" max="16" step="2" value="8" oninput="document.getElementById('lpc-order-val').textContent=this.value; runLpcSimulation();" style="width:100px;">
+                        <span id="lpc-order-val" style="color:var(--primary); font-weight:700; width:20px; display:inline-block; text-align:left;">8</span>
+                    </div>
+
+                    <button class="btn btn-primary" onclick="runLpcSimulation()">⚡ 파형 생성 & 분석</button>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <div>
+                        <div class="options-label" style="text-align: left;">원본 신호 (Original) vs LPC 예측 신호 (Predicted)</div>
+                        <canvas id="lpc-signal-canvas" width="800" height="220" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                        <div style="display:flex; gap:16px; justify-content:center; font-size:12px; margin-top:8px;">
+                            <span style="color:#2979ff;">■ 원본 신호 (Original)</span>
+                            <span style="color:#ffc400;">■ LPC 예측 신호 (Predicted)</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="options-label" style="text-align: left;">예측 잔차 신호 (Prediction Residual / Error)</div>
+                        <canvas id="lpc-residual-canvas" width="800" height="120" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                        <div style="display:flex; gap:16px; justify-content:center; font-size:12px; margin-top:8px;">
+                            <span style="color:#2dce89;">■ 예측 오차 (Residual)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats-grid" style="margin-top:24px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                    <div class="stat-card">
+                        <div class="stat-lbl">원본 신호 분산 (Variance)</div>
+                        <div class="stat-val" id="lpc-orig-var" style="color:#2979ff;">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-lbl">잔차 신호 분산 (Variance)</div>
+                        <div class="stat-val" id="lpc-res-var" style="color:#2dce89;">0.00</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-lbl">분산 감소율 (Energy Reduction)</div>
+                        <div class="stat-val" id="lpc-var-reduction" style="color:#ffc400;">0.00%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-lbl">예상 비트 절약 (Entropy Gain)</div>
+                        <div class="stat-val" id="lpc-entropy-gain" style="color:#d500f9;">0.00 bits</div>
                     </div>
                 </div>
             </div>
@@ -1966,21 +2031,35 @@
         function switchSimTab(tab) {
             const tansPanel = document.getElementById("sim-tans-panel");
             const cmPanel = document.getElementById("sim-cm-panel");
+            const lpcPanel = document.getElementById("sim-lpc-panel");
             const tansBtn = document.getElementById("tab-tans-btn");
             const cmBtn = document.getElementById("tab-cm-btn");
+            const lpcBtn = document.getElementById("tab-lpc-btn");
             
             if (tab === 'tans') {
                 tansPanel.style.display = "block";
                 cmPanel.style.display = "none";
+                lpcPanel.style.display = "none";
                 tansBtn.classList.add("active");
                 cmBtn.classList.remove("active");
+                lpcBtn.classList.remove("active");
                 runTansSimulation();
-            } else {
+            } else if (tab === 'cm') {
                 tansPanel.style.display = "none";
                 cmPanel.style.display = "block";
+                lpcPanel.style.display = "none";
                 tansBtn.classList.remove("active");
                 cmBtn.classList.add("active");
+                lpcBtn.classList.remove("active");
                 resetCmSimulation();
+            } else {
+                tansPanel.style.display = "none";
+                cmPanel.style.display = "none";
+                lpcPanel.style.display = "block";
+                tansBtn.classList.remove("active");
+                cmBtn.classList.remove("active");
+                lpcBtn.classList.add("active");
+                runLpcSimulation();
             }
         }
 
@@ -2175,10 +2254,222 @@
             }
         }
 
+        // LPC variables and simulation functions
+        function solveLpc(s, p) {
+            const N = s.length;
+            const r = new Array(p + 1).fill(0);
+            for (let i = 0; i <= p; i++) {
+                let sum = 0.0;
+                for (let j = 0; j < N - i; j++) {
+                    sum += s[j] * s[j + i];
+                }
+                r[i] = sum;
+            }
+
+            if (r[0] < 1e-9) {
+                return new Array(p).fill(0);
+            }
+
+            let a = new Array(p + 1).fill(0);
+            let E = r[0];
+            a[0] = 1.0;
+
+            for (let i = 1; i <= p; i++) {
+                let sum = 0.0;
+                for (let j = 1; j < i; j++) {
+                    sum += a[j] * r[i - j];
+                }
+                let k = (r[i] - sum) / E;
+                
+                let next_a = new Array(p + 1).fill(0);
+                next_a[0] = 1.0;
+                next_a[i] = k;
+                for (let j = 1; j < i; j++) {
+                    next_a[j] = a[j] - k * a[i - j];
+                }
+                a = next_a;
+                E = E * (1.0 - k * k);
+            }
+            return a.slice(1);
+        }
+
+        function drawLpcSignalChart(canvasId, orig, pred) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            
+            // Grid
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, H / 2);
+            ctx.lineTo(W, H / 2);
+            ctx.stroke();
+            
+            for (let i = 1; i < 6; i++) {
+                const y = (H * i) / 6;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(W, y);
+                ctx.stroke();
+            }
+            
+            const N = orig.length;
+            const scaleX = W / (N - 1);
+            
+            let maxVal = 1.0;
+            for (let i = 0; i < N; i++) {
+                maxVal = Math.max(maxVal, Math.abs(orig[i]), Math.abs(pred[i]));
+            }
+            const scaleY = (H / 2 - 20) / maxVal;
+            
+            // Draw original (blue)
+            ctx.strokeStyle = "#2979ff";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                const x = i * scaleX;
+                const y = H / 2 - orig[i] * scaleY;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            
+            // Draw predicted (orange)
+            ctx.strokeStyle = "#ffc400";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                const x = i * scaleX;
+                const y = H / 2 - pred[i] * scaleY;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        function drawLpcResidualChart(canvasId, residual) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            
+            // Grid
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, H / 2);
+            ctx.lineTo(W, H / 2);
+            ctx.stroke();
+            
+            const N = residual.length;
+            const scaleX = W / (N - 1);
+            
+            let maxVal = 1.0;
+            for (let i = 0; i < N; i++) {
+                maxVal = Math.max(maxVal, Math.abs(residual[i]));
+            }
+            const scaleY = (H / 2 - 10) / maxVal;
+            
+            // Draw residual (green)
+            ctx.strokeStyle = "#2dce89";
+            ctx.lineWidth = 1.8;
+            ctx.beginPath();
+            for (let i = 0; i < N; i++) {
+                const x = i * scaleX;
+                const y = H / 2 - residual[i] * scaleY;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function runLpcSimulation() {
+            const waveType = document.getElementById("lpc-wave-type").value;
+            const p = parseInt(document.getElementById("lpc-order").value);
+            
+            const N = 250;
+            const s = [];
+            
+            if (waveType === "sine") {
+                for (let i = 0; i < N; i++) {
+                    s.push(Math.sin(2 * Math.PI * 0.04 * i) * 100);
+                }
+            } else if (waveType === "harmonic") {
+                for (let i = 0; i < N; i++) {
+                    const val = Math.sin(2 * Math.PI * 0.03 * i) * 60 +
+                                Math.sin(2 * Math.PI * 0.06 * i) * 30 +
+                                Math.sin(2 * Math.PI * 0.09 * i) * 15;
+                    s.push(val);
+                }
+            } else {
+                let last = 0.0;
+                for (let i = 0; i < N; i++) {
+                    let val = Math.sin(2 * Math.PI * 0.02 * i) * 50 + 
+                              (Math.sin(2 * Math.PI * 0.08 * i) * 20) +
+                              (Math.random() - 0.5) * 40;
+                    val = 0.75 * val + 0.25 * last;
+                    last = val;
+                    s.push(val);
+                }
+            }
+            
+            const coeff = solveLpc(s, p);
+            
+            const pred = new Array(N).fill(0);
+            const residual = new Array(N).fill(0);
+            
+            for (let i = 0; i < N; i++) {
+                let p_val = 0.0;
+                for (let j = 0; j < p; j++) {
+                    if (i - 1 - j >= 0) {
+                        p_val += coeff[j] * s[i - 1 - j];
+                    }
+                }
+                pred[i] = p_val;
+                residual[i] = s[i] - p_val;
+            }
+            
+            let meanS = 0.0;
+            s.forEach(val => meanS += val);
+            meanS /= N;
+            let varS = 0.0;
+            s.forEach(val => varS += (val - meanS) ** 2);
+            varS /= N;
+            
+            let meanRes = 0.0;
+            residual.forEach(val => meanRes += val);
+            meanRes /= N;
+            let varRes = 0.0;
+            residual.forEach(val => varRes += (val - meanRes) ** 2);
+            varRes /= N;
+            
+            if (varRes < 1e-6) varRes = 1e-6;
+            
+            const reduction = Math.max(0, (1.0 - varRes / varS) * 100);
+            const entropyGain = Math.max(0, 0.5 * Math.log2(varS / varRes));
+            
+            drawLpcSignalChart("lpc-signal-canvas", s, pred);
+            drawLpcResidualChart("lpc-residual-canvas", residual);
+            
+            document.getElementById("lpc-orig-var").textContent = varS.toFixed(2);
+            document.getElementById("lpc-res-var").textContent = varRes.toFixed(2);
+            document.getElementById("lpc-var-reduction").textContent = `${reduction.toFixed(2)}%`;
+            document.getElementById("lpc-entropy-gain").textContent = `${entropyGain.toFixed(2)} bits/sample`;
+        }
+
         // Initialize simulators
         setTimeout(() => {
             runTansSimulation();
             resetCmSimulation();
+            runLpcSimulation();
         }, 100);
     </script>
 </body>

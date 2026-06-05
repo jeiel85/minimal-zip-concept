@@ -46,7 +46,7 @@ pub mod wasm;
 // [Rust 경로 수입 설명]
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
 use checksum::{bytes_to_hex, calculate_sha256};
-use cli::{CompressionMode, EntropyMode};
+pub use cli::{CompressionMode, EntropyMode};
 use error::MzcError;
 use format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,

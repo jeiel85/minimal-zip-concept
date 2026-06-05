@@ -1,6 +1,9 @@
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[cfg(not(target_arch = "wasm32"))]
+use rayon::prelude::*;
 
 const MZAR_MAGIC: &[u8; 4] = b"MZAR";
 
@@ -15,8 +18,68 @@ pub struct MzarEntry {
 
 /// **지정한 디렉토리를 재귀적으로 순회하여 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
 pub fn archive_directory(src_dir: &Path) -> io::Result<Vec<u8>> {
-    let mut entries = Vec::new();
-    collect_entries(src_dir, src_dir, &mut entries)?;
+    let mut paths = Vec::new();
+    collect_paths(src_dir, src_dir, &mut paths)?;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let entries: Vec<MzarEntry> = paths
+        .into_par_iter()
+        .map(|(path, is_dir)| {
+            let relative_path = path
+                .strip_prefix(src_dir)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if is_dir {
+                Ok(MzarEntry {
+                    relative_path,
+                    is_dir: true,
+                    size: 0,
+                    data: Vec::new(),
+                })
+            } else {
+                let data = fs::read(&path)?;
+                let size = data.len() as u64;
+                Ok(MzarEntry {
+                    relative_path,
+                    is_dir: false,
+                    size,
+                    data,
+                })
+            }
+        })
+        .collect::<Result<Vec<MzarEntry>, io::Error>>()?;
+
+    #[cfg(target_arch = "wasm32")]
+    let entries: Vec<MzarEntry> = paths
+        .into_iter()
+        .map(|(path, is_dir)| {
+            let relative_path = path
+                .strip_prefix(src_dir)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if is_dir {
+                Ok(MzarEntry {
+                    relative_path,
+                    is_dir: true,
+                    size: 0,
+                    data: Vec::new(),
+                })
+            } else {
+                let data = fs::read(&path)?;
+                let size = data.len() as u64;
+                Ok(MzarEntry {
+                    relative_path,
+                    is_dir: false,
+                    size,
+                    data,
+                })
+            }
+        })
+        .collect::<Result<Vec<MzarEntry>, io::Error>>()?;
 
     let mut output = Vec::new();
     // 1. Magic bytes 쓰기
@@ -176,11 +239,11 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
     Ok(())
 }
 
-/// **디렉토리 재귀 탐색 헬퍼 함수**
-fn collect_entries(
+/// **디렉토리 재귀 탐색 헬퍼 함수 (경로 수집)**
+fn collect_paths(
     base_dir: &Path,
     current_dir: &Path,
-    entries: &mut Vec<MzarEntry>,
+    paths: &mut Vec<(PathBuf, bool)>,
 ) -> io::Result<()> {
     for entry_res in fs::read_dir(current_dir)? {
         let entry = entry_res?;
@@ -189,34 +252,19 @@ fn collect_entries(
         // base_dir 기준 상대 경로 계산
         let relative_path = path
             .strip_prefix(base_dir)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
-            .to_string_lossy()
-            .replace('\\', "/"); // OS 범용 호환을 위해 슬래시 통일
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-        if relative_path.is_empty() {
+        if relative_path.as_os_str().is_empty() {
             continue;
         }
 
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            // 디렉토리 메타데이터 추가
-            entries.push(MzarEntry {
-                relative_path: relative_path.clone(),
-                is_dir: true,
-                size: 0,
-                data: Vec::new(),
-            });
+            paths.push((path.clone(), true));
             // 재귀 호출
-            collect_entries(base_dir, &path, entries)?;
+            collect_paths(base_dir, &path, paths)?;
         } else if file_type.is_file() {
-            let data = fs::read(&path)?;
-            let size = data.len() as u64;
-            entries.push(MzarEntry {
-                relative_path,
-                is_dir: false,
-                size,
-                data,
-            });
+            paths.push((path, false));
         }
     }
     Ok(())
