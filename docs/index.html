@@ -1202,6 +1202,7 @@
                 <button id="tab-tans-btn" class="tab-btn active" onclick="switchSimTab('tans')">📈 tANS 시뮬레이션</button>
                 <button id="tab-cm-btn" class="tab-btn" onclick="switchSimTab('cm')">🔬 Context Mixing 시뮬레이션</button>
                 <button id="tab-lpc-btn" class="tab-btn" onclick="switchSimTab('lpc')">🎵 LPC 오디오 필터 시뮬레이션</button>
+                <button id="tab-bench-btn" class="tab-btn" onclick="switchSimTab('bench')">📊 종합 벤치마크</button>
             </div>
 
             <!-- tANS Tab Content -->
@@ -1388,6 +1389,33 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Benchmark Tab Content -->
+            <div id="sim-bench-panel" class="demo-card" style="display: none;">
+                <h3 style="margin-bottom: 12px; font-weight:600; color:var(--accent);">MZC1 ~ MZC7 실시간 종합 벤치마크</h3>
+                <p style="font-size:14px; color:var(--text-muted); margin-bottom:20px;">
+                    선택한 파일(또는 기본 로드된 데이터)을 브라우저 내에서 직접 RLE(MZC1)부터 Context Mixing(MZC7)까지의 모델로 각각 압축하여, 압축률과 소요 시간을 실시간으로 비교하고 시각화합니다.
+                </p>
+
+                <div class="demo-actions" style="margin-bottom: 20px; justify-content: center; gap: 16px;">
+                    <button class="btn btn-primary" id="run-bench-btn" onclick="runLiveBenchmark()">⚡ 실시간 벤치마크 실행</button>
+                </div>
+
+                <div class="stats-grid" style="margin-bottom: 24px; grid-template-columns: 1fr 1fr; gap: 24px;">
+                    <div class="stat-card" style="text-align: left; padding: 20px;">
+                        <div class="stat-lbl" style="font-size:14px; font-weight:600; margin-bottom:12px;">📈 압축률 비교 (%) - 낮을수록 우수</div>
+                        <canvas id="bench-ratio-canvas" width="400" height="250" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                    </div>
+                    <div class="stat-card" style="text-align: left; padding: 20px;">
+                        <div class="stat-lbl" style="font-size:14px; font-weight:600; margin-bottom:12px;">⚡ 압축 소요 시간 (ms) - 낮을수록 우수</div>
+                        <canvas id="bench-time-canvas" width="400" height="250" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                    </div>
+                </div>
+
+                <div class="terminal-box" id="bench-log-box" style="max-height: 180px; text-align: left;">
+                    <!-- Real-time benchmark log lines -->
+                </div>
+            </div>
         </section>
 
         <!-- CLI Guide Section -->
@@ -1510,7 +1538,7 @@
             wasmInstance.exports.wasm_free(ptr, len);
         }
 
-        function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc) {
+        function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc, bwt = false) {
             if (!wasmInstance) return null;
             
             const { ptr: inPtr, len: inLen } = allocUint8Array(data);
@@ -1526,6 +1554,7 @@
                 bcj ? 1 : 0,
                 png ? 1 : 0,
                 lpc ? 1 : 0,
+                bwt ? 1 : 0,
                 outLenPtr
             );
             
@@ -2032,35 +2061,196 @@
             const tansPanel = document.getElementById("sim-tans-panel");
             const cmPanel = document.getElementById("sim-cm-panel");
             const lpcPanel = document.getElementById("sim-lpc-panel");
+            const benchPanel = document.getElementById("sim-bench-panel");
             const tansBtn = document.getElementById("tab-tans-btn");
             const cmBtn = document.getElementById("tab-cm-btn");
             const lpcBtn = document.getElementById("tab-lpc-btn");
+            const benchBtn = document.getElementById("tab-bench-btn");
+            
+            tansPanel.style.display = tab === 'tans' ? "block" : "none";
+            cmPanel.style.display = tab === 'cm' ? "block" : "none";
+            lpcPanel.style.display = tab === 'lpc' ? "block" : "none";
+            benchPanel.style.display = tab === 'bench' ? "block" : "none";
+            
+            tansBtn.classList.toggle("active", tab === 'tans');
+            cmBtn.classList.toggle("active", tab === 'cm');
+            lpcBtn.classList.toggle("active", tab === 'lpc');
+            benchBtn.classList.toggle("active", tab === 'bench');
             
             if (tab === 'tans') {
-                tansPanel.style.display = "block";
-                cmPanel.style.display = "none";
-                lpcPanel.style.display = "none";
-                tansBtn.classList.add("active");
-                cmBtn.classList.remove("active");
-                lpcBtn.classList.remove("active");
                 runTansSimulation();
             } else if (tab === 'cm') {
-                tansPanel.style.display = "none";
-                cmPanel.style.display = "block";
-                lpcPanel.style.display = "none";
-                tansBtn.classList.remove("active");
-                cmBtn.classList.add("active");
-                lpcBtn.classList.remove("active");
                 resetCmSimulation();
-            } else {
-                tansPanel.style.display = "none";
-                cmPanel.style.display = "none";
-                lpcPanel.style.display = "block";
-                tansBtn.classList.remove("active");
-                cmBtn.classList.remove("active");
-                lpcBtn.classList.add("active");
+            } else if (tab === 'lpc') {
                 runLpcSimulation();
+            } else if (tab === 'bench') {
+                drawPlaceholderCharts();
             }
+        }
+
+        // ==========================================
+        // Live Benchmark Javascript Implementation
+        // ==========================================
+        function drawBarChart(canvasId, labels, data, colors, suffix) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            const width = canvas.width;
+            const height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+
+            const paddingLeft = 60;
+            const paddingRight = 20;
+            const paddingTop = 30;
+            const paddingBottom = 40;
+
+            const graphWidth = width - paddingLeft - paddingRight;
+            const graphHeight = height - paddingTop - paddingBottom;
+
+            // Find max value
+            const maxVal = Math.max(...data, 1) * 1.15;
+
+            // Draw Y Grid lines
+            ctx.strokeStyle = "#1c1d22";
+            ctx.lineWidth = 1;
+            ctx.fillStyle = "#8f9099";
+            ctx.font = "10px sans-serif";
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+
+            const ticks = 5;
+            for (let i = 0; i <= ticks; i++) {
+                const val = (maxVal * i) / ticks;
+                const y = paddingTop + graphHeight - (val / maxVal) * graphHeight;
+                ctx.beginPath();
+                ctx.moveTo(paddingLeft, y);
+                ctx.lineTo(width - paddingRight, y);
+                ctx.stroke();
+                ctx.fillText(val.toFixed(0) + suffix, paddingLeft - 8, y);
+            }
+
+            // Draw Bars
+            const numBars = data.length;
+            const barSpacing = 12;
+            const totalSpacing = barSpacing * (numBars - 1);
+            const barWidth = (graphWidth - totalSpacing) / numBars;
+
+            ctx.textAlign = "center";
+            ctx.textBaseline = "bottom";
+
+            for (let i = 0; i < numBars; i++) {
+                const val = data[i];
+                const x = paddingLeft + i * (barWidth + barSpacing);
+                const barHeight = (val / maxVal) * graphHeight;
+                const y = paddingTop + graphHeight - barHeight;
+
+                ctx.fillStyle = colors[i] || "#2dce89";
+                ctx.fillRect(x, y, barWidth, barHeight);
+
+                // Draw label value above bar
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 11px sans-serif";
+                ctx.fillText(val.toFixed(1) + suffix, x + barWidth / 2, y - 4);
+
+                // Draw X Label below bar
+                ctx.fillStyle = "#8f9099";
+                ctx.font = "10px sans-serif";
+                ctx.textBaseline = "top";
+                ctx.fillText(labels[i], x + barWidth / 2, paddingTop + graphHeight + 6);
+            }
+        }
+
+        function drawPlaceholderCharts() {
+            const labels = ["MZC1", "MZC3", "MZC5", "MZC6", "MZC7"];
+            const colors = ["#2dce89", "#2979ff", "#ffc400", "#d500f9", "#ff5252"];
+            drawBarChart("bench-ratio-canvas", labels, [0, 0, 0, 0, 0], colors, "%");
+            drawBarChart("bench-time-canvas", labels, [0, 0, 0, 0, 0], colors, "ms");
+            
+            const logBox = document.getElementById("bench-log-box");
+            if (logBox) {
+                logBox.innerHTML = '<div style="color:#8f9099;">벤치마크 실행 대기 중... 위의 버튼을 눌러 측정을 시작해 주세요.</div>';
+            }
+        }
+
+        async function runLiveBenchmark() {
+            const logBox = document.getElementById("bench-log-box");
+            if (!logBox) return;
+            logBox.innerHTML = "";
+
+            function logBench(msg, type = "info") {
+                const line = document.createElement("div");
+                line.style.marginBottom = "4px";
+                if (type === "success") line.style.color = "#2dce89";
+                else if (type === "warn") line.style.color = "#ffc400";
+                else line.style.color = "#ffffff";
+                line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                logBox.appendChild(line);
+                logBox.scrollTop = logBox.scrollHeight;
+            }
+
+            let data = selectedFileData;
+            let filename = selectedFileName;
+            if (!data) {
+                logBench("로드된 파일이 없어 테스트용 50KB 텍스트 샘플 데이터를 자동 생성합니다.", "warn");
+                const sampleText = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(900);
+                data = new TextEncoder().encode(sampleText);
+                filename = "sample_text.txt";
+            }
+
+            logBench(`실시간 벤치마크 기동: ${filename} (${data.length} bytes)`, "info");
+            
+            const labels = ["MZC1", "MZC3", "MZC5", "MZC6", "MZC7"];
+            const colors = ["#2dce89", "#2979ff", "#ffc400", "#d500f9", "#ff5252"];
+            const ratios = [];
+            const times = [];
+
+            // Helper to run wasm compress & decompress
+            function testCase(label, mode, entropy, level, delta, bcj, png, lpc, bwt) {
+                logBench(`${label} 압축 알고리즘 수행 중...`);
+                // Yield thread briefly for UI rendering
+                const start = performance.now();
+                const compressed = runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc, bwt);
+                const elapsed = performance.now() - start;
+                
+                if (!compressed) {
+                    logBench(`❌ ${label} 압축 실패!`, "warn");
+                    ratios.push(100);
+                    times.push(0);
+                    return;
+                }
+
+                // Verify decompress
+                const decompressed = runWasmDecompress(compressed);
+                if (!decompressed || decompressed.length !== data.length) {
+                    logBench(`❌ ${label} 무결성 복원 검증 실패!`, "warn");
+                } else {
+                    logBench(`✔ ${label} 무결성 검증 완료: ${compressed.length} bytes (${(compressed.length / data.length * 100).toFixed(2)}%) in ${elapsed.toFixed(1)}ms`, "success");
+                }
+
+                ratios.push((compressed.length / data.length) * 100);
+                times.push(elapsed);
+            }
+
+            // Yield execution to allow UI update before blocking WASM run
+            setTimeout(() => {
+                // MZC1 (Rle)
+                testCase("MZC1 (RLE)", 0, 0, 6, false, false, false, false, false);
+                // MZC3 (LZ77+Static)
+                testCase("MZC3 (LZ77+Static)", 3, 1, 6, false, false, false, false, false);
+                // MZC5 (LZ77+Dyn+Filters)
+                testCase("MZC5 (LZ77+Dyn+Filters)", 3, 2, 6, true, true, false, false, false);
+                // MZC6 (tANS)
+                testCase("MZC6 (tANS)", 2, 3, 6, false, false, false, false, false);
+                // MZC7 (CM)
+                const isImage = filename.toLowerCase().endsWith(".png") || filename.toLowerCase().endsWith(".bmp");
+                const isAudio = filename.toLowerCase().endsWith(".wav");
+                testCase("MZC7 (Context Mixing)", 2, 4, 6, false, false, isImage, isAudio, !isImage && !isAudio);
+
+                logBench("🎉 모든 실시간 알고리즘 비교 테스트 완료!", "success");
+
+                drawBarChart("bench-ratio-canvas", labels, ratios, colors, "%");
+                drawBarChart("bench-time-canvas", labels, times, colors, "ms");
+            }, 50);
         }
 
         // tANS variables

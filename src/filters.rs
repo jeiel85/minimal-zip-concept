@@ -446,33 +446,72 @@ pub fn inverse_lpc_filter(data: &mut [u8]) {
     }
 }
 
-/// **BWT 연산을 위한 Suffix Array (접미사 배열) 생성 (Manber-Myers O(N log^2 N) 알고리즘 - 순환 교대 정렬)**
+/// **BWT 연산을 위한 Suffix Array (접미사 배열) 생성 (O(N log N) Counting-Sort Radix Doubling - 순환 교대 정렬)**
 fn suffix_array(s: &[u8]) -> Vec<usize> {
     let n = s.len();
+    if n == 0 {
+        return Vec::new();
+    }
     let mut sa: Vec<usize> = (0..n).collect();
-    let mut rank: Vec<usize> = s.iter().map(|&x| x as usize + 1).collect();
-    let mut tmp = vec![0; n];
+    let mut rank: Vec<usize> = s.iter().map(|&x| x as usize).collect();
     let mut k = 1;
+    
+    let mut sa_temp = vec![0; n];
+    let mut sa_out = vec![0; n];
+    let mut new_rank = vec![0; n];
+    let max_val = n.max(256) + 1;
+    let mut count = vec![0; max_val];
+    
     while k < n {
-        sa.sort_by(|&i, &j| {
-            if rank[i] != rank[j] {
-                rank[i].cmp(&rank[j])
-            } else {
-                let ri = rank[(i + k) % n];
-                let rj = rank[(j + k) % n];
-                ri.cmp(&rj)
-            }
-        });
-        tmp[sa[0]] = 1;
+        // 1. Sort by secondary key rank[(i + k) % n]
+        count.fill(0);
+        for i in 0..n {
+            count[rank[(i + k) % n]] += 1;
+        }
+        for i in 1..max_val {
+            count[i] += count[i - 1];
+        }
+        for i in (0..n).rev() {
+            let idx = sa[i];
+            let next_pos = (idx + k) % n;
+            let key = rank[next_pos];
+            count[key] -= 1;
+            sa_temp[count[key]] = idx;
+        }
+        
+        // 2. Sort by primary key rank[i]
+        count.fill(0);
+        for i in 0..n {
+            count[rank[sa_temp[i]]] += 1;
+        }
+        for i in 1..max_val {
+            count[i] += count[i - 1];
+        }
+        for i in (0..n).rev() {
+            let idx = sa_temp[i];
+            let key = rank[idx];
+            count[key] -= 1;
+            sa_out[count[key]] = idx;
+        }
+        
+        sa.copy_from_slice(&sa_out);
+        
+        // Recompute ranks
+        new_rank[sa[0]] = 0;
+        let mut unique_ranks = 1;
         for i in 1..n {
             let prev = sa[i - 1];
             let curr = sa[i];
             let same = rank[prev] == rank[curr]
                 && rank[(prev + k) % n] == rank[(curr + k) % n];
-            tmp[curr] = tmp[prev] + (if same { 0 } else { 1 });
+            if !same {
+                unique_ranks += 1;
+            }
+            new_rank[curr] = unique_ranks - 1;
         }
-        rank.copy_from_slice(&tmp);
-        if rank[sa[n - 1]] == n {
+        rank.copy_from_slice(&new_rank);
+        
+        if unique_ranks == n {
             break;
         }
         k *= 2;

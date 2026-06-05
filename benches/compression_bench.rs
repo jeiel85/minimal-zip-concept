@@ -34,5 +34,24 @@ fn bench_compression(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_compression);
+fn bench_micro(c: &mut Criterion) {
+    let mut group = c.benchmark_group("mzc_micro");
+    let text_data = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100); // ~5.6KB
+    
+    group.bench_function("bwt_apply", |b| {
+        b.iter(|| {
+            let _ = mzc::filters::apply_bwt(&text_data);
+        });
+    });
+    
+    group.bench_function("cm_compress", |b| {
+        b.iter(|| {
+            let _ = mzc::cm::cm_compress(&text_data);
+        });
+    });
+    
+    group.finish();
+}
+
+criterion_group!(benches, bench_compression, bench_micro);
 criterion_main!(benches);

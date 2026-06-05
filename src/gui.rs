@@ -344,6 +344,46 @@ impl MzcGuiApp {
         }
     }
 
+    fn render_file_tree(ui: &mut egui::Ui, path: &std::path::Path) {
+        let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+        if path.is_dir() {
+            egui::CollapsingHeader::new(format!("📂 {}", name))
+                .default_open(true)
+                .show(ui, |ui| {
+                    if let Ok(entries) = std::fs::read_dir(path) {
+                        let mut entry_paths: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+                        entry_paths.sort_by(|a, b| {
+                            let a_is_dir = a.is_dir();
+                            let b_is_dir = b.is_dir();
+                            if a_is_dir != b_is_dir {
+                                b_is_dir.cmp(&a_is_dir)
+                            } else {
+                                a.file_name().cmp(&b.file_name())
+                            }
+                        });
+                        for entry_path in entry_paths {
+                            Self::render_file_tree(ui, &entry_path);
+                        }
+                    }
+                });
+        } else {
+            let size = path.metadata().map(|m| m.len()).unwrap_or(0);
+            let size_str = if size > 1024 * 1024 {
+                format!("{:.2} MB", size as f64 / (1024.0 * 1024.0))
+            } else if size > 1024 {
+                format!("{:.2} KB", size as f64 / 1024.0)
+            } else {
+                format!("{} B", size)
+            };
+            ui.horizontal(|ui| {
+                ui.label(format!("📄 {}", name));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.colored_label(egui::Color32::from_rgb(120, 120, 120), size_str);
+                });
+            });
+        }
+    }
+
     fn spawn_check_update_task(&self) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
@@ -2258,13 +2298,24 @@ impl eframe::App for MzcGuiApp {
                             ui.colored_label(egui::Color32::from_rgb(150, 150, 150), "📁 대상 파일 명세");
                             ui.separator();
 
-                            let filename = match &self.input_path {
-                                Some(p) => p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned(),
-                                None => "지정되지 않음".to_string(),
-                            };
-                            ui.label(format!("파일이름: {}", filename));
-                            ui.label(format!("포맷 버전: {}", self.format_description));
-                            ui.label(format!("적용 모드: {}", self.algorithm_description));
+                            let is_dir = self.input_path.as_ref().map(|p| p.is_dir()).unwrap_or(false);
+                            if is_dir {
+                                ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "🌳 디렉토리 구조 브라우저");
+                                ui.add_space(4.0);
+                                egui::ScrollArea::vertical().max_height(100.0).show(ui, |ui| {
+                                    if let Some(ref path) = self.input_path {
+                                        Self::render_file_tree(ui, path);
+                                    }
+                                });
+                            } else {
+                                let filename = match &self.input_path {
+                                    Some(p) => p.file_name().unwrap_or(p.as_os_str()).to_string_lossy().into_owned(),
+                                    None => "지정되지 않음".to_string(),
+                                };
+                                ui.label(format!("파일이름: {}", filename));
+                                ui.label(format!("포맷 버전: {}", self.format_description));
+                                ui.label(format!("적용 모드: {}", self.algorithm_description));
+                            }
                         });
 
                         columns[1].group(|ui| {

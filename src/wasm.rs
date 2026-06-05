@@ -1,5 +1,5 @@
 use crate::cli::{CompressionMode, EntropyMode};
-use crate::{compress_bytes_v2_dict, decompress_bytes_v2_dict};
+use crate::{compress_bytes_v2_with_progress_dict, decompress_bytes_v2_dict};
 
 #[no_mangle]
 pub extern "C" fn wasm_alloc(size: usize) -> *mut u8 {
@@ -27,6 +27,7 @@ pub extern "C" fn wasm_compress(
     bcj: u8,
     png: u8,
     lpc: u8,
+    bwt: u8,
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
@@ -48,7 +49,7 @@ pub extern "C" fn wasm_compress(
         _ => EntropyMode::Huffman,
     };
 
-    let out_bytes = compress_bytes_v2_dict(
+    let out_bytes = compress_bytes_v2_with_progress_dict(
         in_bytes,
         comp_mode,
         ent_mode,
@@ -57,7 +58,9 @@ pub extern "C" fn wasm_compress(
         bcj != 0,
         png != 0,
         lpc != 0,
+        bwt != 0,
         None,
+        |_, _, _, _| {},
     );
 
     let out_len = out_bytes.len();
