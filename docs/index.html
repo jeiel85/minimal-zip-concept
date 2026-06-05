@@ -1190,6 +1190,141 @@
             </div>
         </section>
 
+        <!-- tANS & CM Simulation Section -->
+        <section id="tans-cm-sim" class="web-demo">
+            <div class="section-header">
+                <h2 class="section-title">tANS & Context Mixing 시뮬레이터</h2>
+                <p class="section-subtitle">비대칭 수계(tANS) 상태 전이 및 컨텍스트 믹싱 가중치 갱신(LMS) 과정을 실시간으로 확인해 보세요.</p>
+            </div>
+
+            <!-- Tab navigator for simulators -->
+            <div style="display:flex; justify-content:center; gap:16px; margin-bottom: 24px;">
+                <button id="tab-tans-btn" class="tab-btn active" onclick="switchSimTab('tans')">📈 tANS 시뮬레이션</button>
+                <button id="tab-cm-btn" class="tab-btn" onclick="switchSimTab('cm')">🔬 Context Mixing 시뮬레이션</button>
+            </div>
+
+            <!-- tANS Tab Content -->
+            <div id="sim-tans-panel" class="demo-card" style="display: block;">
+                <h3 style="margin-bottom: 12px; font-weight:600; color:var(--accent);">tANS 상태 변이 및 비트 방출 시뮬레이터</h3>
+                <p style="font-size:14px; color:var(--text-muted); margin-bottom:20px;">
+                    비대칭 수계(ANS) 엔트로피 인코더 작동 중, 심볼 값에 따라 상태값 x가 천이하고 한계를 넘을 때마다 비트스트림으로 방출되는 과정입니다.
+                </p>
+
+                <div class="demo-actions" style="margin-bottom: 20px;">
+                    <button id="tans-sim-run" class="btn btn-primary" onclick="runTansSimulation()">⚡ 시뮬레이션 갱신</button>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <div>
+                        <div class="options-label" style="text-align: left;">tANS 상태 변화 추이 (State x)</div>
+                        <canvas id="tans-state-canvas" width="800" height="200" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                    </div>
+                    <div>
+                        <div class="options-label" style="text-align: left;">방출된 비트 스트림 (Emitted Bits)</div>
+                        <canvas id="tans-bits-canvas" width="800" height="100" style="background:#0c0d10; border: 1px solid var(--border); border-radius: 8px; width: 100%; height: auto;"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CM Tab Content -->
+            <div id="sim-cm-panel" class="demo-card" style="display: none;">
+                <h3 style="margin-bottom: 12px; font-weight:600; color:var(--accent);">Context Mixing (CM) 비트 확률 및 LMS 가중치 시각화</h3>
+                <p style="font-size:14px; color:var(--text-muted); margin-bottom:20px;">
+                    1바이트(0xAB, 이진수: 10101011)를 부호화할 때, 각 비트마다 0차~4차 컨텍스트 정보의 기여 확률을 LMS(최소제곱) 알고리즘으로 기여도(가중치)를 학습하는 동작입니다.
+                </p>
+
+                <div class="demo-actions" style="margin-bottom: 20px; justify-content: center; gap: 12px;">
+                    <button class="btn btn-secondary" onclick="resetCmSimulation()">🔄 리셋</button>
+                    <button class="btn btn-primary" onclick="stepCmSimulation()">▶ 1비트씩</button>
+                    <button id="cm-play-btn" class="btn btn-secondary" onclick="toggleCmAutoplay()">▶ 자동 실행</button>
+                </div>
+
+                <div class="stats-grid" style="margin-bottom: 24px; grid-template-columns: 1fr 1fr;">
+                    <div class="stat-card" style="text-align: left;">
+                        <div class="stat-lbl" style="font-size:14px; font-weight:600; margin-bottom:12px;">비트 처리 상태</div>
+                        <div style="font-size:14px; line-height: 1.8;">
+                            • 처리 비트 인덱스: <span id="cm-bit-idx" style="color:var(--primary); font-weight:700;">0 / 8</span><br/>
+                            • 현재 대상 바이트: <span style="font-family:var(--font-mono)">0xAB (10101011)</span><br/>
+                            • 현재 컨텍스트 바이트: <span id="cm-ctx-byte" style="font-family:var(--font-mono)">0x01</span><br/>
+                            • 직전 1바이트: <span style="font-family:var(--font-mono)">0x55</span>, 직전 2바이트: <span style="font-family:var(--font-mono)">0x33</span>
+                        </div>
+                        <div style="margin-top: 16px;">
+                            <div class="stat-lbl" style="font-size:12px; margin-bottom:8px;">각 차수별 예측 확률 (0 ~ 4096):</div>
+                            <div id="cm-probs-list" style="font-size:12px; color:var(--text-muted); line-height: 1.5; font-family:var(--font-mono);">
+                                0차 문맥 (p0): 2048<br/>
+                                1차 문맥 (p1): 2048<br/>
+                                2차 문맥 (p2): 2048<br/>
+                                3차 문맥 (p3): 2048<br/>
+                                4차 문맥 (p4): 2048
+                            </div>
+                            <div style="margin-top: 8px; font-weight:600; font-size: 13px;">
+                                최종 혼합 확률 (p): <span id="cm-mixed-p" style="color:var(--primary)">2048</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stat-card" style="text-align: left;">
+                        <div class="stat-lbl" style="font-size:14px; font-weight:600; margin-bottom:12px;">🧠 LMS 적응형 가중치 상태</div>
+                        <div style="display:flex; flex-direction:column; gap:12px; font-size:12px;">
+                            <div>
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                                    <span>w0 (0차 문맥 가중치)</span><span id="cm-w0-val">1024</span>
+                                </div>
+                                <div style="width:100%; background:#1c1d22; height:8px; border-radius:4px; overflow:hidden;">
+                                    <div id="cm-w0-bar" style="background:#9fa0a6; height:100%; width: 6.25%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                                    <span>w1 (1차 문맥 가중치)</span><span id="cm-w1-val">1024</span>
+                                </div>
+                                <div style="width:100%; background:#1c1d22; height:8px; border-radius:4px; overflow:hidden;">
+                                    <div id="cm-w1-bar" style="background:#ffc400; height:100%; width: 6.25%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                                    <span>w2 (2차 문맥 가중치)</span><span id="cm-w2-val">2048</span>
+                                </div>
+                                <div style="width:100%; background:#1c1d22; height:8px; border-radius:4px; overflow:hidden;">
+                                    <div id="cm-w2-bar" style="background:#2979ff; height:100%; width: 12.5%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                                    <span>w3 (3차 문맥 가중치)</span><span id="cm-w3-val">2048</span>
+                                </div>
+                                <div style="width:100%; background:#1c1d22; height:8px; border-radius:4px; overflow:hidden;">
+                                    <div id="cm-w3-bar" style="background:#d500f9; height:100%; width: 12.5%;"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                                    <span>w4 (4차 문맥 가중치)</span><span id="cm-w4-val">2048</span>
+                                </div>
+                                <div style="width:100%; background:#1c1d22; height:8px; border-radius:4px; overflow:hidden;">
+                                    <div id="cm-w4-bar" style="background:#ff5252; height:100%; width: 12.5%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Range Coder bar split -->
+                <div style="background:#0c0d10; border: 1px solid var(--border); border-radius:8px; padding: 20px; text-align: left;">
+                    <div class="stat-lbl" style="font-size:13px; margin-bottom:12px;">📐 Range Coder 비트별 수직선 구간 분할 (0-영역 vs 1-영역)</div>
+                    <div style="width:100%; background:#ff5252; height:32px; border-radius:6px; position:relative; overflow:hidden; display:flex; font-size:12px; font-weight:700; color:#fff;">
+                        <div id="cm-split-bar" style="background:#2dce89; height:100%; width:50%; display:flex; align-items:center; justify-content:center; transition: width 0.4s ease-out;">
+                            0-영역 (Mixed p)
+                        </div>
+                        <div style="flex:1; display:flex; align-items:center; justify-content:center;">
+                            1-영역 (1 - Mixed p)
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- CLI Guide Section -->
         <section id="guide" class="guide">
             <div class="section-header">
@@ -1824,6 +1959,227 @@
                 lz77HistoryContainer.appendChild(line);
             });
         }
+
+        // ==========================================
+        // tANS & CM Web Simulator Porting
+        // ==========================================
+        function switchSimTab(tab) {
+            const tansPanel = document.getElementById("sim-tans-panel");
+            const cmPanel = document.getElementById("sim-cm-panel");
+            const tansBtn = document.getElementById("tab-tans-btn");
+            const cmBtn = document.getElementById("tab-cm-btn");
+            
+            if (tab === 'tans') {
+                tansPanel.style.display = "block";
+                cmPanel.style.display = "none";
+                tansBtn.classList.add("active");
+                cmBtn.classList.remove("active");
+                runTansSimulation();
+            } else {
+                tansPanel.style.display = "none";
+                cmPanel.style.display = "block";
+                tansBtn.classList.remove("active");
+                cmBtn.classList.add("active");
+                resetCmSimulation();
+            }
+        }
+
+        // tANS variables
+        let tansSimStates = [];
+        let tansSimBits = [];
+
+        function runTansSimulation() {
+            tansSimStates = [];
+            tansSimBits = [];
+            let x = 32.0;
+            for (let i = 0; i < 100; i++) {
+                tansSimStates.push([i, x]);
+                let bit = (i * 17 + 13) % 2;
+                tansSimBits.push([i, bit]);
+                
+                if (bit === 0) {
+                    x = (x * 1.35 + 8.0) % 512.0;
+                } else {
+                    x = (x * 1.85 + 15.0) % 512.0;
+                }
+                if (x < 32.0) {
+                    x += 32.0;
+                }
+            }
+            
+            drawLineChart("tans-state-canvas", tansSimStates, "#ffc400", 0, 512);
+            drawLineChart("tans-bits-canvas", tansSimBits, "#2979ff", 0, 1);
+        }
+
+        function drawLineChart(canvasId, points, color, minVal, maxVal) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            const W = canvas.width;
+            const H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            
+            // Draw grid lines
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+            ctx.lineWidth = 1;
+            for (let i = 1; i < 5; i++) {
+                const y = (H * i) / 5;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(W, y);
+                ctx.stroke();
+            }
+            
+            if (points.length === 0) return;
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            
+            const scaleX = W / (points.length - 1);
+            const rangeY = maxVal - minVal;
+            
+            points.forEach((p, idx) => {
+                const x = idx * scaleX;
+                const y = H - ((p[1] - minVal) / rangeY) * (H - 20) - 10;
+                if (idx === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+        }
+
+        // CM variables
+        let cmSimBitIdx = 0;
+        let cmSimByteVal = 0xAB;
+        let cmSimBits = [true, false, true, false, true, false, true, true];
+        let cmSimCtxByte = 1;
+        let cmSimWeights = [];
+        let cmSimProbabilities = [2048, 2048, 2048, 2048, 2048];
+        let cmSimMixedP = 2048;
+        let cmAutoplayInterval = null;
+
+        function resetCmSimulation() {
+            clearInterval(cmAutoplayInterval);
+            cmAutoplayInterval = null;
+            document.getElementById("cm-play-btn").textContent = "▶ 자동 실행";
+            
+            cmSimBitIdx = 0;
+            cmSimCtxByte = 1;
+            cmSimWeights = [];
+            for (let i = 0; i < 8; i++) {
+                cmSimWeights.push([1024, 1024, 2048, 2048, 2048]);
+            }
+            cmSimProbabilities = [2048, 2048, 2048, 2048, 2048];
+            cmSimMixedP = 2048;
+            updateCmDom();
+        }
+
+        function stepCmSimulation() {
+            if (cmSimBitIdx >= 8) {
+                resetCmSimulation();
+                return;
+            }
+            const bit = cmSimBits[cmSimBitIdx];
+            
+            const n0_0 = 2 + cmSimBitIdx;
+            const n0_1 = 4 + (7 - cmSimBitIdx);
+            const p0 = Math.floor(((n0_0 + 1) * 4096) / (n0_0 + n0_1 + 2));
+            
+            const n1_0 = 10 - cmSimBitIdx;
+            const n1_1 = 5 + cmSimBitIdx;
+            const p1 = Math.floor(((n1_0 + 1) * 4096) / (n1_0 + n1_1 + 2));
+            
+            const n2_0 = 15 + cmSimBitIdx * 2;
+            const n2_1 = 25 - cmSimBitIdx * 2;
+            const p2 = Math.floor(((n2_0 + 1) * 4096) / (n2_0 + n2_1 + 2));
+            
+            const n3_0 = cmSimBitIdx * 3 + 2;
+            const n3_1 = 18 - cmSimBitIdx * 2;
+            const p3 = Math.floor(((n3_0 + 1) * 4096) / (n3_0 + n3_1 + 2));
+            
+            const n4_0 = cmSimBitIdx * 2 + 5;
+            const n4_1 = 20 - cmSimBitIdx;
+            const p4 = Math.floor(((n4_0 + 1) * 4096) / (n4_0 + n4_1 + 2));
+            
+            cmSimProbabilities = [p0, p1, p2, p3, p4];
+            
+            const w = cmSimWeights[cmSimBitIdx];
+            const sum_w = w[0] + w[1] + w[2] + w[3] + w[4];
+            let p = Math.floor((w[0] * p0 + w[1] * p1 + w[2] * p2 + w[3] * p3 + w[4] * p4) / sum_w);
+            if (p === 0) p = 1;
+            else if (p >= 4096) p = 4095;
+            cmSimMixedP = p;
+            
+            // LMS weight updates
+            const target = bit ? 0 : 4096;
+            const err = target - p;
+            const err_abs = Math.abs(err);
+            const learning_shift = (err_abs > 2500) ? 11 : (err_abs > 1200) ? 12 : 13;
+            
+            const next_w = [...w];
+            for (let i = 0; i < 5; i++) {
+                const pi_val = [p0, p1, p2, p3, p4][i];
+                const delta = (err * (pi_val - p)) >> learning_shift;
+                next_w[i] = Math.max(128, Math.min(16384, w[i] + delta));
+            }
+            
+            if (cmSimBitIdx + 1 < 8) {
+                cmSimWeights[cmSimBitIdx + 1] = next_w;
+            }
+            
+            cmSimCtxByte = (cmSimCtxByte << 1) | (bit ? 1 : 0);
+            cmSimBitIdx += 1;
+            updateCmDom();
+        }
+
+        function updateCmDom() {
+            document.getElementById("cm-bit-idx").textContent = `${cmSimBitIdx} / 8`;
+            document.getElementById("cm-ctx-byte").textContent = `0x${cmSimCtxByte.toString(16).toUpperCase().padStart(2, '0')}`;
+            document.getElementById("cm-probs-list").innerHTML = `
+                0차 문맥 (p0): ${cmSimProbabilities[0]}<br/>
+                1차 문맥 (p1): ${cmSimProbabilities[1]}<br/>
+                2차 문맥 (p2): ${cmSimProbabilities[2]}<br/>
+                3차 문맥 (p3): ${cmSimProbabilities[3]}<br/>
+                4차 문맥 (p4): ${cmSimProbabilities[4]}
+            `;
+            document.getElementById("cm-mixed-p").textContent = cmSimMixedP;
+            
+            const w = cmSimWeights[Math.min(cmSimBitIdx, 7)] || [1024, 1024, 2048, 2048, 2048];
+            for (let i = 0; i < 5; i++) {
+                document.getElementById(`cm-w${i}-val`).textContent = w[i];
+                document.getElementById(`cm-w${i}-bar`).style.width = `${(w[i] / 16384) * 100}%`;
+            }
+            
+            document.getElementById("cm-split-bar").style.width = `${(cmSimMixedP / 4096) * 100}%`;
+        }
+
+        function toggleCmAutoplay() {
+            const btn = document.getElementById("cm-play-btn");
+            if (cmAutoplayInterval) {
+                clearInterval(cmAutoplayInterval);
+                cmAutoplayInterval = null;
+                btn.textContent = "▶ 자동 실행";
+            } else {
+                btn.textContent = "⏸ 정지";
+                cmAutoplayInterval = setInterval(() => {
+                    stepCmSimulation();
+                    if (cmSimBitIdx >= 8) {
+                        clearInterval(cmAutoplayInterval);
+                        cmAutoplayInterval = null;
+                        btn.textContent = "▶ 자동 실행";
+                    }
+                }, 1000);
+            }
+        }
+
+        // Initialize simulators
+        setTimeout(() => {
+            runTansSimulation();
+            resetCmSimulation();
+        }, 100);
     </script>
 </body>
 </html>

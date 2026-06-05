@@ -558,6 +558,82 @@ pub fn find_lz77_match(data: &[u8], pos: usize, window_size: usize) -> Option<(u
     find_lz77_match_with_limit(data, pos, window_size, 4096)
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn common_prefix_length_avx2(a: &[u8], b: &[u8], max_len: usize) -> usize {
+    use std::arch::x86_64::*;
+    let mut len = 0;
+    while len + 32 <= max_len {
+        let val_a = _mm256_loadu_si256(a.as_ptr().add(len) as *const __m256i);
+        let val_b = _mm256_loadu_si256(b.as_ptr().add(len) as *const __m256i);
+        let cmp = _mm256_cmpeq_epi8(val_a, val_b);
+        let mask = _mm256_movemask_epi8(cmp) as u32;
+        if mask != 0xFFFFFFFF {
+            let first_mismatch = (!mask).trailing_zeros() as usize;
+            return len + first_mismatch;
+        }
+        len += 32;
+    }
+    while len < max_len && a[len] == b[len] {
+        len += 1;
+    }
+    len
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn common_prefix_length_neon(a: &[u8], b: &[u8], max_len: usize) -> usize {
+    use std::arch::aarch64::*;
+    let mut len = 0;
+    while len + 16 <= max_len {
+        let val_a = vld1q_u8(a.as_ptr().add(len));
+        let val_b = vld1q_u8(b.as_ptr().add(len));
+        let cmp = vceqq_u8(val_a, val_b);
+        let low = vgetq_lane_u64(vreinterpretq_u64_u8(cmp), 0);
+        let high = vgetq_lane_u64(vreinterpretq_u64_u8(cmp), 1);
+        if low != 0xFFFFFFFFFFFFFFFF || high != 0xFFFFFFFFFFFFFFFF {
+            for i in 0..16 {
+                if a[len + i] != b[len + i] {
+                    return len + i;
+                }
+            }
+        }
+        len += 16;
+    }
+    while len < max_len && a[len] == b[len] {
+        len += 1;
+    }
+    len
+}
+
+#[inline(always)]
+fn common_prefix_len(data: &[u8], pos1: usize, pos2: usize, max_len: usize) -> usize {
+    let a = &data[pos1..];
+    let b = &data[pos2..];
+    let limit = std::cmp::min(std::cmp::min(a.len(), b.len()), max_len);
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        if is_x86_feature_detected!("avx2") {
+            unsafe {
+                return common_prefix_length_avx2(a, b, limit);
+            }
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            return common_prefix_length_neon(a, b, limit);
+        }
+    }
+
+    let mut len = 0;
+    while len < limit && a[len] == b[len] {
+        len += 1;
+    }
+    len
+}
+
 pub struct Lz77HashChains {
     head: Vec<i32>,
     prev: Vec<i32>,
@@ -603,6 +679,8 @@ impl Lz77HashChains {
         let mut best_len = 0;
         let mut steps = 0;
 
+        let simd_enabled = crate::ENABLE_SIMD.load(std::sync::atomic::Ordering::Relaxed);
+
         while j != -1 {
             if best_len >= max_possible {
                 break;
@@ -628,8 +706,12 @@ impl Lz77HashChains {
             }
 
             let mut len = 0;
-            while len < max_possible && data[match_pos + len] == data[pos + len] {
-                len += 1;
+            if simd_enabled {
+                len = common_prefix_len(data, match_pos, pos, max_possible);
+            } else {
+                while len < max_possible && data[match_pos + len] == data[pos + len] {
+                    len += 1;
+                }
             }
 
             if len > best_len {
