@@ -13,6 +13,7 @@ Rather than attempting to outperform mature production-grade compressors (like Z
 [![Try it in your browser](https://img.shields.io/badge/Try%20it%20in%20your%20browser-WASM%20Demo-brightgreen?style=for-the-badge&logo=webassembly&logoColor=white)](https://jeiel85.github.io/minimal-zip-concept/)
 [![Crates.io](https://img.shields.io/crates/v/mzc.svg?style=for-the-badge&color=orange)](https://crates.io/crates/mzc)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg?style=for-the-badge)](https://github.com/jeiel85/minimal-zip-concept)
+[![Codecov](https://img.shields.io/codecov/c/github/jeiel85/minimal-zip-concept?style=for-the-badge&logo=codecov)](https://codecov.io/gh/jeiel85/minimal-zip-concept)
 
 <br/>
 

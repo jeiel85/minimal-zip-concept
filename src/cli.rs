@@ -62,11 +62,11 @@ pub enum EntropyMode {
 ///   긴 인자명(`--long`), 짧은 인자명(`-s`), 기본값(`default_value_t`) 등을 편리하게 지정할 수 있습니다.
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// 원본 파일을 MZC 압축 파일로 변환합니다.
+    /// 원본 파일들을 MZC 압축 파일로 변환합니다.
     Compress {
-        /// 압축할 원본 파일의 경로
-        #[arg(value_name = "INPUT_FILE")]
-        input_file: PathBuf,
+        /// 압축할 원본 파일 또는 디렉토리들의 경로
+        #[arg(value_name = "INPUT_PATHS", num_args = 1..)]
+        input_paths: Vec<PathBuf>,
 
         /// 생성할 압축 파일의 출력 경로 (생략 시 원래 파일명에 .mzc가 붙어 자동 생성됨)
         #[arg(value_name = "OUTPUT_FILE")]
@@ -107,6 +107,10 @@ pub enum Commands {
         /// 전역 공유 사전 파일 경로 (옵션)
         #[arg(long = "dict-file", value_name = "DICT_FILE")]
         dict_file: Option<PathBuf>,
+
+        /// 압축 파일 암호화용 비밀번호 (AES-256)
+        #[arg(long, short = 'p')]
+        password: Option<String>,
     },
 
     /// MZC 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
@@ -122,13 +126,17 @@ pub enum Commands {
         /// 전역 공유 사전 파일 경로 (옵션)
         #[arg(long = "dict-file", value_name = "DICT_FILE")]
         dict_file: Option<PathBuf>,
+
+        /// 암호화 해제용 비밀번호 (AES-256)
+        #[arg(long, short = 'p')]
+        password: Option<String>,
     },
 
-    /// 지정한 원본 파일을 임시 메모리 내에서 압축 후 다시 해제하여 원본과 100% 동일한지 라운드트립 검증을 수행합니다.
+    /// 지정한 원본 파일들을 임시 메모리 내에서 압축 후 다시 해제하여 원본과 100% 동일한지 라운드트립 검증을 수행합니다.
     Test {
-        /// 무손실 압축 검증을 수행해 볼 원본 파일 경로
-        #[arg(value_name = "INPUT_FILE")]
-        input_file: PathBuf,
+        /// 무손실 압축 검증을 수행해 볼 원본 파일 또는 디렉토리들의 경로
+        #[arg(value_name = "INPUT_PATHS", num_args = 1..)]
+        input_paths: Vec<PathBuf>,
 
         /// 압축 모드 선택
         #[arg(long, value_enum, default_value_t = CompressionMode::Hybrid)]
@@ -165,6 +173,10 @@ pub enum Commands {
         /// 전역 공유 사전 파일 경로 (옵션)
         #[arg(long = "dict-file", value_name = "DICT_FILE")]
         dict_file: Option<PathBuf>,
+
+        /// 암호화 테스트용 비밀번호 (AES-256)
+        #[arg(long, short = 'p')]
+        password: Option<String>,
     },
 
     /// 다수의 원본 텍스트/바이너리 샘플로부터 공유 사전을 생성하여 파일로 저장합니다.

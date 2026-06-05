@@ -43,6 +43,12 @@ pub enum MzcError {
         current_size: usize,
     },
 
+    /// 암호 해독(Decryption)에 실패했을 때 (잘못된 비밀번호 등)
+    DecryptionFailed,
+
+    /// 비밀번호가 필요하지만 제공되지 않았을 때
+    PasswordRequired,
+
     /// I/O 시스템에서 발생하는 입출력 에러입니다.
     IoError(String),
 }
@@ -51,6 +57,12 @@ pub enum MzcError {
 impl fmt::Display for MzcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            MzcError::DecryptionFailed => {
+                write!(f, "암호 해독 실패 (비밀번호가 올바르지 않거나 데이터가 손상되었습니다)")
+            }
+            MzcError::PasswordRequired => {
+                write!(f, "비밀번호가 필요한 암호화 파일입니다. 비밀번호를 입력해주세요.")
+            }
             MzcError::IoError(msg) => {
                 write!(f, "I/O 입출력 오류: {msg}")
             }

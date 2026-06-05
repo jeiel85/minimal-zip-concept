@@ -29,6 +29,7 @@ pub const MAGIC_MZC4: &[u8; 4] = b"MZC4";
 pub const MAGIC_MZC5: &[u8; 4] = b"MZC5";
 pub const MAGIC_MZC6: &[u8; 4] = b"MZC6";
 pub const MAGIC_MZC7: &[u8; 4] = b"MZC7";
+pub const MAGIC_MZC8: &[u8; 4] = b"MZC8";
 
 pub const VERSION_MZC1: u8 = 0x01;
 pub const VERSION_MZC2: u8 = 0x02;
@@ -37,6 +38,7 @@ pub const VERSION_MZC4: u8 = 0x04;
 pub const VERSION_MZC5: u8 = 0x05;
 pub const VERSION_MZC6: u8 = 0x06;
 pub const VERSION_MZC7: u8 = 0x07;
+pub const VERSION_MZC8: u8 = 0x08;
 
 pub const ALGORITHM_RLE: u8 = 0x01;
 pub const ALGORITHM_DICT: u8 = 0x02;
@@ -55,8 +57,28 @@ pub const HEADER_SIZE_MZC4: usize = 56;
 pub const HEADER_SIZE_MZC5: usize = 56;
 pub const HEADER_SIZE_MZC6: usize = 56;
 pub const HEADER_SIZE_MZC7: usize = 56;
+pub const HEADER_SIZE_MZC8: usize = 56;
 
 impl MzcHeader {
+    /// MZC8(버전 8) 기반의 새 헤더 구조체를 생성합니다.
+    pub fn new_v8(
+        algorithm_type: u8,
+        original_size: u64,
+        payload_size: u64,
+        dictionary_size: u16,
+        sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            magic: *MAGIC_MZC8,
+            version: VERSION_MZC8,
+            algorithm_type,
+            original_size,
+            payload_size,
+            dictionary_size,
+            original_sha256: sha256,
+        }
+    }
+
     /// MZC7(버전 7) 기반의 새 헤더 구조체를 생성합니다.
     pub fn new_v7(
         algorithm_type: u8,
@@ -603,10 +625,55 @@ impl MzcHeader {
                 dictionary_size,
                 original_sha256,
             })
+        } else if magic == *MAGIC_MZC8 {
+            // ================== MZC8 (56바이트) 파싱 ==================
+            if bytes.len() < HEADER_SIZE_MZC8 {
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
+            }
+
+            let version = bytes[4];
+            if version != VERSION_MZC8 {
+                return Err(MzcError::InvalidVersion {
+                    expected: VERSION_MZC8,
+                    found: version,
+                });
+            }
+
+            let algorithm_type = bytes[5];
+
+            let original_size_bytes: [u8; 8] = bytes[6..14]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let original_size = u64::from_le_bytes(original_size_bytes);
+
+            let payload_size_bytes: [u8; 8] = bytes[14..22]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let payload_size = u64::from_le_bytes(payload_size_bytes);
+
+            let dictionary_size_bytes: [u8; 2] = bytes[22..24]
+                .try_into()
+                .expect("u16 사전크기 파싱용 2바이트 슬라이스 획득");
+            let dictionary_size = u16::from_le_bytes(dictionary_size_bytes);
+
+            let mut original_sha256 = [0u8; 32];
+            original_sha256.copy_from_slice(&bytes[24..56]);
+
+            Ok(Self {
+                magic,
+                version,
+                algorithm_type,
+                original_size,
+                payload_size,
+                dictionary_size,
+                original_sha256,
+            })
         } else {
             // 매직넘버 모두 틀린 규정 외 오염 파일
             let found = String::from_utf8_lossy(&magic).into_owned();
-            let expected = "MZC1 to MZC7".to_string();
+            let expected = "MZC1 to MZC8".to_string();
             Err(MzcError::InvalidMagic { expected, found })
         }
     }

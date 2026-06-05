@@ -39,6 +39,9 @@ pub mod inspect;
 // ─── 공개 모듈: 아카이브 컨테이너 ───
 pub mod archive;
 
+// ─── 공개 모듈: 암호화 및 해독 ───
+pub mod crypto;
+
 // ─── WebAssembly 바인딩 모듈 ───
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -51,7 +54,9 @@ use error::MzcError;
 use format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
     FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
-    VERSION_MZC1, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6, VERSION_MZC7,
+    HEADER_SIZE_MZC8, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5,
+    VERSION_MZC6, VERSION_MZC7, VERSION_MZC8, MAGIC_MZC1, MAGIC_MZC2, MAGIC_MZC3, MAGIC_MZC4,
+    MAGIC_MZC5, MAGIC_MZC6, MAGIC_MZC7, MAGIC_MZC8,
 };
 use huffman::{
     huffman_compress, huffman_compress_dynamic, huffman_decompress, huffman_decompress_dynamic,
@@ -123,7 +128,7 @@ pub fn compress_bytes_v2(
     png: bool,
     lpc: bool,
 ) -> Vec<u8> {
-    compress_bytes_v2_dict(original, mode, entropy, level, delta, bcj, png, lpc, None)
+    compress_bytes_v2_dict_password(original, mode, entropy, level, delta, bcj, png, lpc, None, None)
 }
 
 /// **전역 공유 사전 데이터(dict_data)를 지원하는 버전 6 및 7 압축 엔트리포인트입니다.**
@@ -138,7 +143,23 @@ pub fn compress_bytes_v2_dict(
     lpc: bool,
     dict_data: Option<&[u8]>,
 ) -> Vec<u8> {
-    compress_bytes_v2_with_progress_dict(
+    compress_bytes_v2_dict_password(original, mode, entropy, level, delta, bcj, png, lpc, dict_data, None)
+}
+
+/// **비밀번호 기반 암호화를 지원하는 사전 기반 압축 엔트리포인트입니다.**
+pub fn compress_bytes_v2_dict_password(
+    original: &[u8],
+    mode: CompressionMode,
+    entropy: EntropyMode,
+    level: u8,
+    delta: bool,
+    bcj: bool,
+    png: bool,
+    lpc: bool,
+    dict_data: Option<&[u8]>,
+    password: Option<&str>,
+) -> Vec<u8> {
+    compress_bytes_v2_with_progress_dict_password(
         original,
         mode,
         entropy,
@@ -149,6 +170,7 @@ pub fn compress_bytes_v2_dict(
         lpc,
         false, // bwt
         dict_data,
+        password,
         |_, _, _, _| {},
     )
 }
@@ -168,7 +190,7 @@ pub fn compress_bytes_v2_with_progress<F>(
 where
     F: Fn(usize, usize, usize, f64) + Send + Sync + Clone,
 {
-    compress_bytes_v2_with_progress_dict(
+    compress_bytes_v2_with_progress_dict_password(
         original,
         mode,
         entropy,
@@ -179,8 +201,90 @@ where
         lpc,
         false, // bwt
         None,
+        None,
         on_chunk_progress,
     )
+}
+
+/// **비밀번호 암호화와 진행상황 피드백을 지원하는 통합 압축 진입로입니다.**
+pub fn compress_bytes_v2_with_progress_dict_password<F>(
+    original: &[u8],
+    mode: CompressionMode,
+    entropy: EntropyMode,
+    level: u8,
+    delta: bool,
+    bcj: bool,
+    png: bool,
+    lpc: bool,
+    bwt: bool,
+    dict_data: Option<&[u8]>,
+    password: Option<&str>,
+    on_chunk_progress: F,
+) -> Vec<u8>
+where
+    F: Fn(usize, usize, usize, f64) + Send + Sync + Clone,
+{
+    let unencrypted_bytes = compress_bytes_v2_with_progress_dict(
+        original,
+        mode,
+        entropy,
+        level,
+        delta,
+        bcj,
+        png,
+        lpc,
+        bwt,
+        dict_data,
+        on_chunk_progress,
+    );
+
+    if let Some(pwd) = password {
+        if pwd.is_empty() {
+            return unencrypted_bytes;
+        }
+        if unencrypted_bytes.len() < 4 {
+            return unencrypted_bytes;
+        }
+        let header = match MzcHeader::from_bytes(&unencrypted_bytes) {
+            Ok(h) => h,
+            Err(_) => return unencrypted_bytes,
+        };
+        let header_size = if header.version >= VERSION_MZC2 {
+            HEADER_SIZE_MZC2
+        } else {
+            HEADER_SIZE_MZC1
+        };
+        if unencrypted_bytes.len() < header_size {
+            return unencrypted_bytes;
+        }
+        let payload_area = &unencrypted_bytes[header_size..];
+
+        // 원본 버전 정보를 암호화 페이로드 시작점에 패킹하여, 해독 시 동적으로 원래의 헤더 구조(MZC5/MZC6/MZC7 등)를 복원할 수 있게 합니다.
+        let mut payload_to_encrypt = Vec::with_capacity(1 + payload_area.len());
+        payload_to_encrypt.push(header.version);
+        payload_to_encrypt.extend_from_slice(payload_area);
+
+        let encrypted_payload = match crypto::encrypt_payload(&payload_to_encrypt, pwd) {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+
+        let mzc8_header = MzcHeader {
+            magic: *MAGIC_MZC8,
+            version: VERSION_MZC8,
+            algorithm_type: header.algorithm_type,
+            original_size: header.original_size,
+            payload_size: encrypted_payload.len() as u64,
+            dictionary_size: header.dictionary_size,
+            original_sha256: header.original_sha256,
+        };
+
+        let mut final_output = mzc8_header.to_bytes();
+        final_output.extend_from_slice(&encrypted_payload);
+        final_output
+    } else {
+        unencrypted_bytes
+    }
 }
 
 /// **GUI/통계 모니터링 및 전역 사전을 동시 지원하는 코어 압축 파이프라인 (MZC7 대응)**
@@ -519,16 +623,94 @@ where
 /// assert_eq!(data.as_ref(), decompressed.as_slice());
 /// ```
 pub fn decompress_bytes_v2(mzc_bytes: &[u8]) -> Result<Vec<u8>, MzcError> {
-    decompress_bytes_v2_dict(mzc_bytes, None)
+    decompress_bytes_v2_dict_password(mzc_bytes, None, None)
 }
 
-/// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
 /// **외부 사전 데이터를 지원하여 해제 복원하는 확장 압축 해제 엔트리포인트입니다.**
 pub fn decompress_bytes_v2_dict(
     mzc_bytes: &[u8],
     dict_data: Option<&[u8]>,
 ) -> Result<Vec<u8>, MzcError> {
-    decompress_bytes_v2_with_progress_dict(mzc_bytes, dict_data, |_, _| {})
+    decompress_bytes_v2_dict_password(mzc_bytes, dict_data, None)
+}
+
+/// **비밀번호 기반 암호 해독과 외부 사전을 동시에 지원하는 복원 엔트리포인트입니다.**
+pub fn decompress_bytes_v2_password(
+    mzc_bytes: &[u8],
+    password: Option<&str>,
+) -> Result<Vec<u8>, MzcError> {
+    decompress_bytes_v2_dict_password(mzc_bytes, None, password)
+}
+
+/// **비밀번호 기반 암호 해독과 외부 사전을 동시에 지원하는 복원 엔트리포인트입니다.**
+pub fn decompress_bytes_v2_dict_password(
+    mzc_bytes: &[u8],
+    dict_data: Option<&[u8]>,
+    password: Option<&str>,
+) -> Result<Vec<u8>, MzcError> {
+    decompress_bytes_v2_with_progress_dict_password(mzc_bytes, dict_data, password, |_, _| {})
+}
+
+/// **진행 상태 콜백 및 비밀번호 해독을 지원하는 디코딩 엔트리포인트입니다.**
+pub fn decompress_bytes_v2_with_progress_dict_password<F>(
+    mzc_bytes: &[u8],
+    dict_data: Option<&[u8]>,
+    password: Option<&str>,
+    on_chunk_progress: F,
+) -> Result<Vec<u8>, MzcError>
+where
+    F: Fn(usize, usize) + Send + Sync + Clone,
+{
+    if mzc_bytes.len() < 4 {
+        return Err(MzcError::TruncatedHeader {
+            read_bytes: mzc_bytes.len(),
+        });
+    }
+
+    let header = MzcHeader::from_bytes(mzc_bytes)?;
+
+    if header.version == VERSION_MZC8 {
+        let pwd = password.ok_or(MzcError::PasswordRequired)?;
+        let payload_area = &mzc_bytes[HEADER_SIZE_MZC8..];
+        if payload_area.len() != header.payload_size as usize {
+            return Err(MzcError::TruncatedBlock {
+                expected: header.payload_size as usize,
+                found: payload_area.len(),
+            });
+        }
+        
+        // Decrypt the payload area
+        let decrypted_payload = crypto::decrypt_payload(payload_area, pwd)?;
+        if decrypted_payload.is_empty() {
+            return Err(MzcError::CorruptDictionary);
+        }
+        let original_version = decrypted_payload[0];
+        let original_payload = &decrypted_payload[1..];
+
+        let original_magic = match original_version {
+            1 => *MAGIC_MZC1,
+            2 => *MAGIC_MZC2,
+            3 => *MAGIC_MZC3,
+            4 => *MAGIC_MZC4,
+            5 => *MAGIC_MZC5,
+            6 => *MAGIC_MZC6,
+            7 => *MAGIC_MZC7,
+            _ => *MAGIC_MZC7,
+        };
+
+        // 원래의 포맷 사양에 맞춘 임시 헤더 복원
+        let mut temp_header = header.clone();
+        temp_header.magic = original_magic;
+        temp_header.version = original_version;
+        temp_header.payload_size = original_payload.len() as u64;
+
+        let mut temp_mzc_bytes = temp_header.to_bytes();
+        temp_mzc_bytes.extend_from_slice(original_payload);
+
+        decompress_bytes_v2_with_progress_dict(&temp_mzc_bytes, dict_data, on_chunk_progress)
+    } else {
+        decompress_bytes_v2_with_progress_dict(mzc_bytes, dict_data, on_chunk_progress)
+    }
 }
 
 /// **진행 상태(Progress) 콜백을 지원하는 디코딩 엔트리포인트입니다.**

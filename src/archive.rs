@@ -113,6 +113,108 @@ pub fn archive_directory(src_dir: &Path) -> io::Result<Vec<u8>> {
     Ok(output)
 }
 
+/// **지정한 여러 파일 및 디렉토리 경로들을 하나의 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
+pub fn archive_paths(paths: &[PathBuf]) -> io::Result<Vec<u8>> {
+    let mut entries = Vec::new();
+
+    for path in paths {
+        let path = path.as_path();
+        if !path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("경로를 찾을 수 없습니다: {:?}", path),
+            ));
+        }
+
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "올바르지 않은 파일 이름"))?
+            .to_string_lossy()
+            .into_owned();
+
+        if path.is_dir() {
+            // 디렉토리 자체를 엔트리로 추가
+            entries.push(MzarEntry {
+                relative_path: file_name.replace('\\', "/"),
+                is_dir: true,
+                size: 0,
+                data: Vec::new(),
+            });
+
+            // 내부 모든 하위 디렉토리 및 파일들을 수집
+            let mut sub_paths = Vec::new();
+            collect_paths(path, path, &mut sub_paths)?;
+
+            for (sub_path, is_dir) in sub_paths {
+                let rel = sub_path.strip_prefix(path).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
+                })?;
+                let relative_path = format!("{}/{}", file_name, rel.to_string_lossy())
+                    .replace('\\', "/");
+
+                if is_dir {
+                    entries.push(MzarEntry {
+                        relative_path,
+                        is_dir: true,
+                        size: 0,
+                        data: Vec::new(),
+                    });
+                } else {
+                    let data = fs::read(&sub_path)?;
+                    let size = data.len() as u64;
+                    entries.push(MzarEntry {
+                        relative_path,
+                        is_dir: false,
+                        size,
+                        data,
+                    });
+                }
+            }
+        } else {
+            // 단일 파일 엔트리 추가
+            let data = fs::read(path)?;
+            let size = data.len() as u64;
+            entries.push(MzarEntry {
+                relative_path: file_name.replace('\\', "/"),
+                is_dir: false,
+                size,
+                data,
+            });
+        }
+    }
+
+    let mut output = Vec::new();
+    // 1. Magic bytes 쓰기
+    output.write_all(MZAR_MAGIC)?;
+    // 2. Entry 개수 쓰기 (u32)
+    output.write_all(&(entries.len() as u32).to_le_bytes())?;
+
+    // 3. 개별 엔트리 직렬화
+    for entry in entries {
+        let path_bytes = entry.relative_path.as_bytes();
+        if path_bytes.len() > u16::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("상대 경로가 너무 깁니다: {}", entry.relative_path),
+            ));
+        }
+        // 경로 길이 (2B)
+        output.write_all(&(path_bytes.len() as u16).to_le_bytes())?;
+        // 경로 내용 (가변)
+        output.write_all(path_bytes)?;
+        // 디렉토리 플래그 (1B)
+        output.write_all(&[if entry.is_dir { 1 } else { 0 }])?;
+        // 파일 크기 (8B)
+        output.write_all(&entry.size.to_le_bytes())?;
+        // 파일 본문 (가변)
+        if !entry.is_dir {
+            output.write_all(&entry.data)?;
+        }
+    }
+
+    Ok(output)
+}
+
 /// **MZAR 바이트 배열을 파싱하여 지정한 디렉토리에 풀어서 복원합니다.**
 pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> {
     if archive_bytes.len() < 8 {

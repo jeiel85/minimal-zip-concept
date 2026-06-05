@@ -131,6 +131,7 @@ pub struct MzcGuiApp {
     compression_mode: CompressionMode,
     entropy_mode: EntropyMode,
     dict_path: Option<PathBuf>, // MZC7 대응 외부 선택 사전 경로
+    password: String,
 
     // 비동기 작업용 채널 및 상태
     status: String,
@@ -261,6 +262,7 @@ impl MzcGuiApp {
             compression_mode: CompressionMode::Lz77,
             entropy_mode: EntropyMode::Huffman,
             dict_path: None,
+            password: String::new(),
             status: "파일을 끌어다 놓거나 아래에서 선택해 주세요.".to_string(),
             is_processing: false,
             task_sender,
@@ -528,6 +530,7 @@ impl MzcGuiApp {
         png: bool,
         lpc: bool,
         dict_path: Option<PathBuf>,
+        password: Option<String>,
     ) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
@@ -552,7 +555,7 @@ impl MzcGuiApp {
 
                     // 실시간 청크 전송 콜백과 함께 라이브러리 압축 구동
                     let tx_progress = tx.clone();
-                    let final_output = crate::compress_bytes_v2_with_progress_dict(
+                    let final_output = crate::compress_bytes_v2_with_progress_dict_password(
                         &original_bytes,
                         mode,
                         entropy,
@@ -563,6 +566,7 @@ impl MzcGuiApp {
                         lpc,
                         false, // bwt
                         dict_bytes.as_deref(),
+                        password.as_deref(),
                         move |chunk_idx, orig_size, comp_size, duration| {
                             let _ = tx_progress.send(TaskResult::ChunkProgress {
                                 chunk_idx,
@@ -871,7 +875,7 @@ impl MzcGuiApp {
     }
 
     /// **비동기 압축 해제 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
-    fn spawn_decompress_task(&self, path: PathBuf, dict_path: Option<PathBuf>) {
+    fn spawn_decompress_task(&self, path: PathBuf, dict_path: Option<PathBuf>, password: Option<String>) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || match std::fs::read(&path) {
             Ok(compressed_bytes) => {
@@ -881,7 +885,7 @@ impl MzcGuiApp {
                     None
                 };
 
-                match crate::decompress_bytes_v2_dict(&compressed_bytes, dict_bytes.as_deref()) {
+                match crate::decompress_bytes_v2_dict_password(&compressed_bytes, dict_bytes.as_deref(), password.as_deref()) {
                     Ok(restored_bytes) => {
                         let restored_size = restored_bytes.len() as u64;
                         let sha256 =
@@ -1959,6 +1963,26 @@ impl eframe::App for MzcGuiApp {
                     });
                 });
 
+                ui.add_space(10.0);
+
+                ui.group(|ui| {
+                    ui.label("🔐 보안 설정 (비밀번호)");
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.password)
+                                .password(true)
+                                .hint_text("비밀번호 입력 (선택사항)")
+                                .desired_width(170.0)
+                        );
+                        if !self.password.is_empty() {
+                            if ui.button("❌").clicked() {
+                                self.password.clear();
+                            }
+                        }
+                    });
+                });
+
                 ui.add_space(15.0);
 
                 ui.group(|ui| {
@@ -2019,7 +2043,11 @@ impl eframe::App for MzcGuiApp {
                             } else {
                                 self.total_chunks_expected = 4;
                             }
-                            self.status = "백그라운드에서 압축 가동 중...".to_string();
+                            let pwd_opt = if self.password.is_empty() {
+                                None
+                            } else {
+                                Some(self.password.clone())
+                            };
                             self.spawn_compress_task(
                                 path.clone(),
                                 self.compression_mode,
@@ -2030,6 +2058,7 @@ impl eframe::App for MzcGuiApp {
                                 self.png_enabled,
                                 self.lpc_enabled,
                                 self.dict_path.clone(),
+                                pwd_opt.clone(),
                             );
                         }
 
@@ -2047,7 +2076,12 @@ impl eframe::App for MzcGuiApp {
                             self.chunks_completed = 0;
                             self.status =
                                 "백그라운드에서 역변환 및 체크섬 교차 검사 중...".to_string();
-                            self.spawn_decompress_task(path.clone(), self.dict_path.clone());
+                            let pwd_opt = if self.password.is_empty() {
+                                None
+                            } else {
+                                Some(self.password.clone())
+                            };
+                            self.spawn_decompress_task(path.clone(), self.dict_path.clone(), pwd_opt);
                         }
 
                         ui.add_space(6.0);

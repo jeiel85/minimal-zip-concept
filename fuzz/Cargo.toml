@@ -1,0 +1,18 @@
+[package]
+name = "mzc-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+mzc = { path = ".." }
+
+# Prevent this crate from being accidentally published
+[workspace]
+
+[[bin]]
+name = "decompress"
+path = "fuzz_targets/decompress.rs"
+test = false
+doc = false
