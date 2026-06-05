@@ -50,6 +50,7 @@ pub mod wasm;
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
 use checksum::{bytes_to_hex, calculate_sha256};
 pub use cli::{CompressionMode, EntropyMode};
+pub use archive::CompressionParams;
 use error::MzcError;
 use format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
@@ -661,6 +662,13 @@ pub fn decompress_bytes_v2_with_progress_dict_password<F>(
 where
     F: Fn(usize, usize) + Send + Sync + Clone,
 {
+    if mzc_bytes.len() >= 4 && &mzc_bytes[0..4] == b"MZAR" {
+        let raw_mzar = archive::decompress_non_solid_archive(mzc_bytes, password, dict_data)
+            .map_err(|e| MzcError::IoError(e.to_string()))?;
+        on_chunk_progress(1, 1);
+        return Ok(raw_mzar);
+    }
+
     if mzc_bytes.len() < 4 {
         return Err(MzcError::TruncatedHeader {
             read_bytes: mzc_bytes.len(),

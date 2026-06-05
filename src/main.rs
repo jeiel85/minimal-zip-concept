@@ -72,6 +72,8 @@ fn main() -> Result<()> {
             bwt,
             dict_file,
             password,
+            solid,
+            non_solid,
         } => {
             // 출력 파일 경로 자동 추론 (첫 번째 입력 경로 기준)
             let out_file = match output_file {
@@ -89,29 +91,17 @@ fn main() -> Result<()> {
                 }
             };
 
+            let is_solid = solid && !non_solid;
+
             println!("압축 시작: {:?} -> {:?}", input_paths, out_file);
-            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}",
-                     mode, entropy, level, delta, bcj, png, lpc, bwt);
+            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}, 솔리드 모드: {}",
+                     mode, entropy, level, delta, bcj, png, lpc, bwt, is_solid);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
             if password.is_some() {
                 println!("비밀번호 기반 암호화(AES-256)가 설정되었습니다.");
             }
-
-            // 원본 파일의 원시 바이트를 로드합니다.
-            // 입력 경로가 여러 개이거나, 디렉토리인 경우 MZAR 아카이브 컨테이너로 먼저 패킹합니다.
-            let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
-            let original_bytes = if is_multi_or_dir {
-                println!("여러 파일 또는 디렉토리가 감지되었습니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
-                mzc::archive::archive_paths(&input_paths)
-                    .with_context(|| format!("입력 파일/디렉토리 아카이빙 실패: {:?}", input_paths))?
-            } else {
-                fs::read(&input_paths[0])
-                    .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
-            };
-
-            let original_size = original_bytes.len() as u64;
 
             // 만약 사전 파일 경로가 주어졌다면, 바이트 데이터를 로드합니다.
             let dict_bytes = if let Some(ref path) = dict_file {
@@ -122,24 +112,9 @@ fn main() -> Result<()> {
                 None
             };
 
-            // 고도화된 MZC 병렬 청크 압축 파이프라인 구동 (MZC7 기능 포함)
-            let final_output = if original_bytes.len() > 100 * 1024 {
-                use indicatif::{ProgressBar, ProgressStyle};
-                let chunk_size = 1024 * 1024; // 1MB chunks
-                let total_chunks = (original_bytes.len() + chunk_size - 1) / chunk_size;
-
-                println!("대용량 파일 압축 중... (총 {}개 청크)", total_chunks);
-                let pb = ProgressBar::new(total_chunks as u64);
-                pb.set_style(
-                    ProgressStyle::default_bar()
-                        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} 청크 ({eta})")
-                        .unwrap()
-                        .progress_chars("#>-")
-                );
-
-                let pb_clone = pb.clone();
-                let result = mzc::compress_bytes_v2_with_progress_dict_password(
-                    &original_bytes,
+            let final_output = if !is_solid {
+                println!("비솔리드(Non-Solid) 개별 파일 압축 모드로 패킹 및 압축을 진행합니다.");
+                let params = mzc::archive::CompressionParams {
                     mode,
                     entropy,
                     level,
@@ -148,29 +123,74 @@ fn main() -> Result<()> {
                     png,
                     lpc,
                     bwt,
-                    dict_bytes.as_deref(),
-                    password.as_deref(),
-                    move |chunk_idx, _total, _, _| {
-                        pb_clone.set_position(chunk_idx as u64);
-                    },
-                );
-                pb.finish_with_message("압축 완료");
-                result
+                    dict_data: dict_bytes.as_deref(),
+                    password: password.as_deref(),
+                };
+                mzc::archive::archive_paths_custom(&input_paths, Some(&params))
+                    .with_context(|| format!("비솔리드 아카이빙 실패: {:?}", input_paths))?
             } else {
-                mzc::compress_bytes_v2_with_progress_dict_password(
-                    &original_bytes,
-                    mode,
-                    entropy,
-                    level,
-                    delta,
-                    bcj,
-                    png,
-                    lpc,
-                    bwt,
-                    dict_bytes.as_deref(),
-                    password.as_deref(),
-                    |_, _, _, _| {},
-                )
+                // 원본 파일의 원시 바이트를 로드합니다.
+                // 입력 경로가 여러 개이거나, 디렉토리인 경우 MZAR 아카이브 컨테이너로 먼저 패킹합니다.
+                let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
+                let original_bytes = if is_multi_or_dir {
+                    println!("여러 파일 또는 디렉토리가 감지되었습니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
+                    mzc::archive::archive_paths(&input_paths)
+                        .with_context(|| format!("입력 파일/디렉토리 아카이빙 실패: {:?}", input_paths))?
+                } else {
+                    fs::read(&input_paths[0])
+                        .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
+                };
+
+                // 고도화된 MZC 병렬 청크 압축 파이프라인 구동 (MZC7 기능 포함)
+                if original_bytes.len() > 100 * 1024 {
+                    use indicatif::{ProgressBar, ProgressStyle};
+                    let chunk_size = 1024 * 1024; // 1MB chunks
+                    let total_chunks = (original_bytes.len() + chunk_size - 1) / chunk_size;
+
+                    println!("대용량 파일 압축 중... (총 {}개 청크)", total_chunks);
+                    let pb = ProgressBar::new(total_chunks as u64);
+                    pb.set_style(
+                        ProgressStyle::default_bar()
+                            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} 청크 ({eta})")
+                            .unwrap()
+                            .progress_chars("#>-")
+                    );
+
+                    let pb_clone = pb.clone();
+                    let result = mzc::compress_bytes_v2_with_progress_dict_password(
+                        &original_bytes,
+                        mode,
+                        entropy,
+                        level,
+                        delta,
+                        bcj,
+                        png,
+                        lpc,
+                        bwt,
+                        dict_bytes.as_deref(),
+                        password.as_deref(),
+                        move |chunk_idx, _total, _, _| {
+                            pb_clone.set_position(chunk_idx as u64);
+                        },
+                    );
+                    pb.finish_with_message("압축 완료");
+                    result
+                } else {
+                    mzc::compress_bytes_v2_with_progress_dict_password(
+                        &original_bytes,
+                        mode,
+                        entropy,
+                        level,
+                        delta,
+                        bcj,
+                        png,
+                        lpc,
+                        bwt,
+                        dict_bytes.as_deref(),
+                        password.as_deref(),
+                        |_, _, _, _| {},
+                    )
+                }
             };
 
             // 최종 압축 파일 디스크에 저장
@@ -180,18 +200,32 @@ fn main() -> Result<()> {
 
             // 압축 성능 보고
             let total_compressed_size = final_output.len();
+            let original_size = if !is_solid {
+                if let Ok(meta) = mzc::archive::parse_mzar_metadata(&final_output) {
+                    meta.iter().map(|entry| if entry.is_dir { 0 } else { entry.size }).sum::<u64>()
+                } else {
+                    0
+                }
+            } else {
+                let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
+                if is_multi_or_dir {
+                    let raw_mzar = mzc::archive::archive_paths(&input_paths)?;
+                    raw_mzar.len() as u64
+                } else {
+                    fs::metadata(&input_paths[0])?.len()
+                }
+            };
+
             let ratio = if original_size > 0 {
                 (total_compressed_size as f64 / original_size as f64) * 100.0
             } else {
                 100.0
             };
-            let sha256_hex = bytes_to_hex(&calculate_sha256(&original_bytes));
 
             println!("압축 완료!");
             println!("Original size: {} bytes", original_size);
             println!("Compressed size: {} bytes", total_compressed_size);
             println!("Ratio: {:.2}%", ratio);
-            println!("SHA-256: {}", sha256_hex);
         }
 
         // --- 압축 해제 (Decompress) 서브커맨드 실행 분기 ---
@@ -279,7 +313,7 @@ fn main() -> Result<()> {
             // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
             if mzc::archive::is_mzar_archive(&decompressed_bytes) {
                 println!("복원된 바이트에서 MZAR 컨테이너 헤더가 감지되었습니다. 폴더 구조 추출을 시작합니다.");
-                mzc::archive::extract_archive(&decompressed_bytes, &out_file).with_context(
+                mzc::archive::extract_archive(&decompressed_bytes, &out_file, final_password.as_deref(), dict_bytes.as_deref()).with_context(
                     || format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file),
                 )?;
                 println!("디렉토리 아카이브 복원 성공!");
@@ -310,30 +344,19 @@ fn main() -> Result<()> {
             bwt,
             dict_file,
             password,
+            solid,
+            non_solid,
         } => {
+            let is_solid = solid && !non_solid;
             println!("라운드트립 자가 검증 테스트 시작: {:?}", input_paths);
-            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}",
-                     mode, entropy, level, delta, bcj, png, lpc, bwt);
+            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}, 솔리드 모드: {}",
+                     mode, entropy, level, delta, bcj, png, lpc, bwt, is_solid);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
             if password.is_some() {
                 println!("비밀번호 암호화 테스트가 켜졌습니다.");
             }
-
-            // 원본 파일/디렉토리 로드 및 아카이빙
-            let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
-            let original_bytes = if is_multi_or_dir {
-                println!("여러 파일 또는 디렉토리가 감지되었습니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
-                mzc::archive::archive_paths(&input_paths)
-                    .with_context(|| format!("테스트 파일 아카이빙 실패: {:?}", input_paths))?
-            } else {
-                fs::read(&input_paths[0])
-                    .with_context(|| format!("테스트 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
-            };
-
-            let original_size = original_bytes.len() as u64;
-            let sha256_hex = bytes_to_hex(&calculate_sha256(&original_bytes));
 
             let dict_bytes = if let Some(ref path) = dict_file {
                 let bytes = fs::read(path)
@@ -343,21 +366,57 @@ fn main() -> Result<()> {
                 None
             };
 
-            // 1. 메모리상에서 즉각 압축
-            let compressed_bytes = mzc::compress_bytes_v2_with_progress_dict_password(
-                &original_bytes,
-                mode,
-                entropy,
-                level,
-                delta,
-                bcj,
-                png,
-                lpc,
-                bwt,
-                dict_bytes.as_deref(),
-                password.as_deref(),
-                |_, _, _, _| {},
-            );
+            let (original_bytes, compressed_bytes) = if !is_solid {
+                println!("비솔리드(Non-Solid) 개별 파일 압축 모드로 자가 테스트를 진행합니다.");
+                let params = mzc::archive::CompressionParams {
+                    mode,
+                    entropy,
+                    level,
+                    delta,
+                    bcj,
+                    png,
+                    lpc,
+                    bwt,
+                    dict_data: dict_bytes.as_deref(),
+                    password: password.as_deref(),
+                };
+                let compressed = mzc::archive::archive_paths_custom(&input_paths, Some(&params))
+                    .with_context(|| format!("비솔리드 테스트 아카이빙 실패: {:?}", input_paths))?;
+                let raw_mzar = mzc::archive::archive_paths_custom(&input_paths, None)
+                    .with_context(|| format!("비솔리드 테스트 원본 아카이빙 실패: {:?}", input_paths))?;
+                (raw_mzar, compressed)
+            } else {
+                // 원본 파일/디렉토리 로드 및 아카이빙
+                let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
+                let original_bytes = if is_multi_or_dir {
+                    println!("여러 파일 또는 디렉토리가 감지되었습니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
+                    mzc::archive::archive_paths(&input_paths)
+                        .with_context(|| format!("테스트 파일 아카이빙 실패: {:?}", input_paths))?
+                } else {
+                    fs::read(&input_paths[0])
+                        .with_context(|| format!("테스트 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
+                };
+
+                // 1. 메모리상에서 즉각 압축
+                let compressed_bytes = mzc::compress_bytes_v2_with_progress_dict_password(
+                    &original_bytes,
+                    mode,
+                    entropy,
+                    level,
+                    delta,
+                    bcj,
+                    png,
+                    lpc,
+                    bwt,
+                    dict_bytes.as_deref(),
+                    password.as_deref(),
+                    |_, _, _, _| {},
+                );
+                (original_bytes, compressed_bytes)
+            };
+
+            let original_size = original_bytes.len() as u64;
+            let sha256_hex = bytes_to_hex(&calculate_sha256(&original_bytes));
             let total_compressed_size = compressed_bytes.len();
 
             // 2. 메모리상에서 즉각 해제 및 체크섬 검증
@@ -678,7 +737,7 @@ fn check_and_run_sfx() -> Result<bool> {
         println!("추출 타겟 디렉토리: {:?}", out_dir);
 
         if mzc::archive::is_mzar_archive(&decompressed_bytes) {
-            mzc::archive::extract_archive(&decompressed_bytes, &out_dir)?;
+            mzc::archive::extract_archive(&decompressed_bytes, &out_dir, final_password.as_deref(), None)?;
             println!("디렉토리 구조 추출 성공: {:?}", out_dir);
         } else {
             let mut out_file = exe_path.clone();

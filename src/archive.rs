@@ -2,10 +2,27 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::cli::{CompressionMode, EntropyMode};
+
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
 
 const MZAR_MAGIC: &[u8; 4] = b"MZAR";
+
+/// **MZAR 아카이브 압축을 위한 개별 압축 파라미터 구조체**
+#[derive(Debug, Clone)]
+pub struct CompressionParams<'a> {
+    pub mode: CompressionMode,
+    pub entropy: EntropyMode,
+    pub level: u8,
+    pub delta: bool,
+    pub bcj: bool,
+    pub png: bool,
+    pub lpc: bool,
+    pub bwt: bool,
+    pub dict_data: Option<&'a [u8]>,
+    pub password: Option<&'a str>,
+}
 
 /// **MZAR 아카이브 컨테이너 엔트리 메타데이터**
 #[derive(Debug, Clone)]
@@ -18,6 +35,14 @@ pub struct MzarEntry {
 
 /// **지정한 디렉토리를 재귀적으로 순회하여 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
 pub fn archive_directory(src_dir: &Path) -> io::Result<Vec<u8>> {
+    archive_directory_custom(src_dir, None)
+}
+
+/// **지정한 디렉토리를 재귀적으로 순회하여 개별/솔리드 압축 옵션을 받아 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
+pub fn archive_directory_custom(
+    src_dir: &Path,
+    compress_params: Option<&CompressionParams>,
+) -> io::Result<Vec<u8>> {
     let mut paths = Vec::new();
     collect_paths(src_dir, src_dir, &mut paths)?;
 
@@ -81,11 +106,19 @@ pub fn archive_directory(src_dir: &Path) -> io::Result<Vec<u8>> {
         })
         .collect::<Result<Vec<MzarEntry>, io::Error>>()?;
 
-    serialize_entries(entries)
+    serialize_entries_custom(entries, compress_params)
 }
 
 /// **지정한 여러 파일 및 디렉토리 경로들을 하나의 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
 pub fn archive_paths(paths: &[PathBuf]) -> io::Result<Vec<u8>> {
+    archive_paths_custom(paths, None)
+}
+
+/// **지정한 여러 파일 및 디렉토리 경로들을 개별/솔리드 압축 옵션을 받아 하나의 MZAR 컨테이너 바이트 배열로 직렬화합니다.**
+pub fn archive_paths_custom(
+    paths: &[PathBuf],
+    compress_params: Option<&CompressionParams>,
+) -> io::Result<Vec<u8>> {
     let mut entries = Vec::new();
 
     for path in paths {
@@ -154,11 +187,19 @@ pub fn archive_paths(paths: &[PathBuf]) -> io::Result<Vec<u8>> {
         }
     }
 
-    serialize_entries(entries)
+    serialize_entries_custom(entries, compress_params)
 }
 
 /// **엔트리 목록을 받아서 중복 데이터를 탐색해 Deduplication을 수행한 후 직렬화합니다.**
-pub fn serialize_entries(mut entries: Vec<MzarEntry>) -> io::Result<Vec<u8>> {
+pub fn serialize_entries(entries: Vec<MzarEntry>) -> io::Result<Vec<u8>> {
+    serialize_entries_custom(entries, None)
+}
+
+/// **엔트리 목록을 받아서 중복 제거 및 (비솔리드인 경우) 개별 병렬 압축을 수행한 뒤 직렬화합니다.**
+pub fn serialize_entries_custom(
+    mut entries: Vec<MzarEntry>,
+    compress_params: Option<&CompressionParams>,
+) -> io::Result<Vec<u8>> {
     // 중복 제거 매핑: 파일 본문 해시 대신 데이터를 그대로 Map의 키로 매핑
     let mut seen_files: std::collections::HashMap<Vec<u8>, String> = std::collections::HashMap::new();
     for entry in entries.iter_mut() {
@@ -169,6 +210,57 @@ pub fn serialize_entries(mut entries: Vec<MzarEntry>) -> io::Result<Vec<u8>> {
                 entry.size = entry.data.len() as u64;
             } else {
                 seen_files.insert(entry.data.clone(), entry.relative_path.clone());
+            }
+        }
+    }
+
+    // 개별 파일 압축 (비솔리드 모드 활성화 시)
+    if let Some(params) = compress_params {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            entries
+                .par_iter_mut()
+                .filter(|entry| entry.entry_type == 0)
+                .for_each(|entry| {
+                    let compressed = crate::compress_bytes_v2_with_progress_dict_password(
+                        &entry.data,
+                        params.mode,
+                        params.entropy,
+                        params.level,
+                        params.delta,
+                        params.bcj,
+                        params.png,
+                        params.lpc,
+                        params.bwt,
+                        params.dict_data,
+                        params.password,
+                        |_, _, _, _| {},
+                    );
+                    entry.data = compressed;
+                    entry.size = entry.data.len() as u64;
+                });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            for entry in entries.iter_mut() {
+                if entry.entry_type == 0 {
+                    let compressed = crate::compress_bytes_v2_with_progress_dict_password(
+                        &entry.data,
+                        params.mode,
+                        params.entropy,
+                        params.level,
+                        params.delta,
+                        params.bcj,
+                        params.png,
+                        params.lpc,
+                        params.bwt,
+                        params.dict_data,
+                        params.password,
+                        |_, _, _, _| {},
+                    );
+                    entry.data = compressed;
+                    entry.size = entry.data.len() as u64;
+                }
             }
         }
     }
@@ -197,8 +289,13 @@ pub fn serialize_entries(mut entries: Vec<MzarEntry>) -> io::Result<Vec<u8>> {
     Ok(output)
 }
 
-/// **MZAR 바이트 배열을 파싱하여 지정한 디렉토리에 풀어서 복원합니다.**
-pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> {
+/// **MZAR 바이트 배열을 파싱하여 지정한 디렉토리에 풀어서 복원합니다. 개별 압축 파일의 해제 및 복호화도 지원합니다.**
+pub fn extract_archive(
+    archive_bytes: &[u8],
+    dest_dir: &Path,
+    password: Option<&str>,
+    dict_data: Option<&[u8]>,
+) -> io::Result<()> {
     if archive_bytes.len() < 8 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -309,9 +406,15 @@ pub fn extract_archive(archive_bytes: &[u8], dest_dir: &Path) -> io::Result<()> 
                     "파일 데이터가 잘렸습니다.",
                 ));
             }
-            let file_data = &archive_bytes[cursor..cursor + file_size];
+            let mut file_data = archive_bytes[cursor..cursor + file_size].to_vec();
             cursor += file_size;
-            files_to_write.push((target_path, file_data.to_vec()));
+
+            if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
+                file_data = crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+            }
+
+            files_to_write.push((target_path, file_data));
         } else if entry_type == 2 {
             if cursor + file_size > data_len {
                 return Err(io::Error::new(
@@ -487,13 +590,7 @@ pub fn parse_mzar_metadata(archive_bytes: &[u8]) -> io::Result<Vec<MzarEntryMeta
         let file_size = u64::from_le_bytes(file_size_bytes);
         cursor += 8;
 
-        entries.push(MzarEntryMetadata {
-            relative_path: path_str,
-            entry_type,
-            is_dir,
-            size: file_size,
-        });
-
+        let mut resolved_size = file_size;
         if entry_type == 0 || entry_type == 2 {
             if cursor + (file_size as usize) > data_len {
                 return Err(io::Error::new(
@@ -501,15 +598,35 @@ pub fn parse_mzar_metadata(archive_bytes: &[u8]) -> io::Result<Vec<MzarEntryMeta
                     "파일 데이터 범위를 초과했습니다.",
                 ));
             }
+            if entry_type == 0 && file_size >= 4 {
+                let entry_data_slice = &archive_bytes[cursor..cursor + (file_size as usize)];
+                if entry_data_slice.len() >= 4 && &entry_data_slice[0..3] == b"MZC" {
+                    if let Ok(mzc_h) = crate::format::MzcHeader::from_bytes(entry_data_slice) {
+                        resolved_size = mzc_h.original_size;
+                    }
+                }
+            }
             cursor += file_size as usize;
         }
+
+        entries.push(MzarEntryMetadata {
+            relative_path: path_str,
+            entry_type,
+            is_dir,
+            size: resolved_size,
+        });
     }
 
     Ok(entries)
 }
 
-/// **MZAR 바이트 배열에서 단일 파일을 타겟팅해 인메모리로 추출하여 반환합니다. 중복 참조도 완벽히 추적 및 역참조합니다.**
-pub fn extract_single_file_from_mzar(archive_bytes: &[u8], target_rel_path: &str) -> io::Result<Vec<u8>> {
+/// **MZAR 바이트 배열에서 단일 파일을 타겟팅해 인메모리로 추출하여 반환합니다. 중복 참조도 완벽히 추적 및 역참조하며, 개별 압축도 해제합니다.**
+pub fn extract_single_file_from_mzar(
+    archive_bytes: &[u8],
+    target_rel_path: &str,
+    password: Option<&str>,
+    dict_data: Option<&[u8]>,
+) -> io::Result<Vec<u8>> {
     if archive_bytes.len() < 8 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -579,7 +696,12 @@ pub fn extract_single_file_from_mzar(archive_bytes: &[u8], target_rel_path: &str
             if entry_type == 1 {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "대상 경로가 디렉토리입니다."));
             } else if entry_type == 0 {
-                return Ok(archive_bytes[data_offset..data_offset + size].to_vec());
+                let mut data = archive_bytes[data_offset..data_offset + size].to_vec();
+                if data.len() >= 4 && &data[0..3] == b"MZC" {
+                    data = crate::decompress_bytes_v2_dict_password(&data, dict_data, password)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+                }
+                return Ok(data);
             } else if entry_type == 2 {
                 let ref_bytes = &archive_bytes[data_offset..data_offset + size];
                 let ref_str = std::str::from_utf8(ref_bytes)
@@ -598,5 +720,97 @@ pub fn extract_single_file_from_mzar(archive_bytes: &[u8], target_rel_path: &str
         io::ErrorKind::InvalidData,
         "순환 참조 또는 너무 깊은 중복 참조 깊이입니다.",
     ))
+}
+
+/// **비솔리드(Non-Solid) MZAR 아카이브를 입력받아, 개별 압축된 모든 파일 엔트리를 해제하여 원본(Raw) MZAR 바이트 배열로 복구합니다.**
+pub fn decompress_non_solid_archive(
+    archive_bytes: &[u8],
+    password: Option<&str>,
+    dict_data: Option<&[u8]>,
+) -> io::Result<Vec<u8>> {
+    if archive_bytes.len() < 8 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "MZAR 데이터가 너무 짧습니다."));
+    }
+    if &archive_bytes[0..4] != MZAR_MAGIC {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "유효한 MZAR 아카이브가 아닙니다."));
+    }
+
+    let mut entry_count_bytes = [0u8; 4];
+    entry_count_bytes.copy_from_slice(&archive_bytes[4..8]);
+    let entry_count = u32::from_le_bytes(entry_count_bytes);
+
+    let mut cursor = 8;
+    let data_len = archive_bytes.len();
+    let mut entries = Vec::new();
+
+    for _ in 0..entry_count {
+        if cursor + 2 > data_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "엔트리 헤더 읽기 실패"));
+        }
+        let mut path_len_bytes = [0u8; 2];
+        path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 2]);
+        let path_len = u16::from_le_bytes(path_len_bytes) as usize;
+        cursor += 2;
+
+        if cursor + path_len > data_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "상대 경로 읽기 실패"));
+        }
+        let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor + path_len])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
+            .to_string();
+        cursor += path_len;
+
+        if cursor + 9 > data_len {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "플래그 읽기 실패"));
+        }
+        let entry_type = archive_bytes[cursor];
+        cursor += 1;
+
+        let mut file_size_bytes = [0u8; 8];
+        file_size_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 8]);
+        let file_size = u64::from_le_bytes(file_size_bytes) as usize;
+        cursor += 8;
+
+        if entry_type == 1 {
+            entries.push(MzarEntry {
+                relative_path: path_str,
+                entry_type,
+                size: 0,
+                data: Vec::new(),
+            });
+        } else if entry_type == 0 {
+            if cursor + file_size > data_len {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "파일 데이터가 잘렸습니다."));
+            }
+            let mut file_data = archive_bytes[cursor..cursor + file_size].to_vec();
+            cursor += file_size;
+
+            if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
+                file_data = crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+            }
+
+            entries.push(MzarEntry {
+                relative_path: path_str,
+                entry_type,
+                size: file_data.len() as u64,
+                data: file_data,
+            });
+        } else if entry_type == 2 {
+            if cursor + file_size > data_len {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "중복 참조 경로가 잘렸습니다."));
+            }
+            let ref_bytes = &archive_bytes[cursor..cursor + file_size];
+            cursor += file_size;
+            entries.push(MzarEntry {
+                relative_path: path_str,
+                entry_type,
+                size: file_size as u64,
+                data: ref_bytes.to_vec(),
+            });
+        }
+    }
+
+    serialize_entries(entries)
 }
 

@@ -110,7 +110,7 @@ fn test_archive_roundtrip_with_files() {
         "아카이브 바이트가 비정상적으로 작습니다."
     );
 
-    extract_archive(&archive_bytes, &dest_dir).expect("아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("아카이브 추출 실패");
 
     // 모든 파일 내용 일치 검증
     assert_dirs_equal(&src_dir, &dest_dir);
@@ -165,7 +165,7 @@ fn test_archive_roundtrip_nested_dirs() {
 
     // 아카이브 생성 및 추출
     let archive_bytes = archive_directory(&src_dir).expect("중첩 디렉토리 아카이브 생성 실패");
-    extract_archive(&archive_bytes, &dest_dir).expect("중첩 디렉토리 아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("중첩 디렉토리 아카이브 추출 실패");
 
     // 전체 구조 일치 검증
     assert_dirs_equal(&src_dir, &dest_dir);
@@ -204,7 +204,7 @@ fn test_archive_roundtrip_empty_dir() {
 
     // 아카이브 생성 및 추출
     let archive_bytes = archive_directory(&src_dir).expect("빈 디렉토리 아카이브 생성 실패");
-    extract_archive(&archive_bytes, &dest_dir).expect("빈 디렉토리 아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("빈 디렉토리 아카이브 추출 실패");
 
     // 빈 디렉토리 존재 여부 확인
     let restored_empty = dest_dir.join("empty_subdir");
@@ -252,7 +252,7 @@ fn test_archive_large_file() {
 
     // 아카이브 생성 및 추출
     let archive_bytes = archive_directory(&src_dir).expect("대용량 파일 아카이브 생성 실패");
-    extract_archive(&archive_bytes, &dest_dir).expect("대용량 파일 아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("대용량 파일 아카이브 추출 실패");
 
     // 파일 내용 무결성 검증
     let restored_data = fs::read(dest_dir.join("large_random.bin")).unwrap();
@@ -381,7 +381,7 @@ fn test_zip_slip_defense() {
     malicious_mzar.extend_from_slice(evil_data);
 
     // 추출 시 PermissionDenied 에러가 발생해야 합니다
-    let result = extract_archive(&malicious_mzar, &dest_dir);
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
     assert!(result.is_err(), "Zip-Slip 공격이 차단되지 않았습니다.");
 
     let err = result.unwrap_err();
@@ -429,7 +429,7 @@ fn test_zip_slip_defense_absolute_path() {
     malicious_mzar.extend_from_slice(&(evil_data.len() as u64).to_le_bytes());
     malicious_mzar.extend_from_slice(evil_data);
 
-    let result = extract_archive(&malicious_mzar, &dest_dir);
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
     assert!(
         result.is_err(),
         "상위 디렉토리 탈출 변형 공격이 차단되지 않았습니다."
@@ -555,19 +555,104 @@ fn test_mzar_deduplication_and_parallel_extraction() {
     assert_eq!(file3.size, 9);
 
     // Now extract and verify roundtrip completeness!
-    extract_archive(&archive_bytes, &dest_dir).expect("아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("아카이브 추출 실패");
 
     assert_dirs_equal(&src_dir, &dest_dir);
 
     // Verify extract_single_file_from_mzar on both standard and duplicates
-    let ext_unique = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "unique.txt").unwrap();
+    let ext_unique = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "unique.txt", None, None).unwrap();
     assert_eq!(ext_unique, b"This content is unique!");
 
-    let ext_dup = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "sub/file3.txt").unwrap();
+    let ext_dup = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "sub/file3.txt", None, None).unwrap();
     assert_eq!(ext_dup, dup_content);
 
     cleanup_temp_dir(&src_dir);
     cleanup_temp_dir(&dest_dir);
 }
 
+// ================== 9. 비솔리드 (Non-Solid) MZAR 라운드트립 검증 ==================
+
+#[test]
+fn test_mzar_non_solid_roundtrip() {
+    use mzc::archive::{archive_directory_custom, CompressionParams, decompress_non_solid_archive};
+    use mzc::cli::{CompressionMode, EntropyMode};
+
+    let src_dir = create_unique_temp_dir("non_solid_roundtrip_src");
+    let dest_dir = create_unique_temp_dir("non_solid_roundtrip_dest");
+
+    // Create test files with various content
+    fs::write(src_dir.join("hello.txt"), b"Hello, Non-Solid MZAR!").unwrap();
+    fs::write(src_dir.join("data.bin"), &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]).unwrap();
+    fs::create_dir_all(src_dir.join("subdir")).unwrap();
+    fs::write(src_dir.join("subdir").join("nested.txt"), b"Nested file content for non-solid test.").unwrap();
+
+    // Create duplicate content to test dedup + non-solid interaction
+    fs::write(src_dir.join("dup_a.txt"), b"Duplicate content here").unwrap();
+    fs::write(src_dir.join("dup_b.txt"), b"Duplicate content here").unwrap();
+
+    // Build compression params for non-solid mode (Hybrid + Huffman, level 1 for speed)
+    let params = CompressionParams {
+        mode: CompressionMode::Hybrid,
+        entropy: EntropyMode::Huffman,
+        level: 1,
+        delta: false,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: None,
+    };
+
+    // Archive with non-solid compression (individual file compression)
+    let non_solid_archive = archive_directory_custom(&src_dir, Some(&params))
+        .expect("비솔리드 아카이브 생성 실패");
+
+    // Verify it's a valid MZAR container
+    assert!(is_mzar_archive(&non_solid_archive), "비솔리드 결과가 MZAR이 아닙니다.");
+
+    // Verify metadata reports original (uncompressed) sizes for type-0 entries
+    let meta = mzc::archive::parse_mzar_metadata(&non_solid_archive)
+        .expect("비솔리드 메타데이터 파싱 실패");
+    let hello_meta = meta.iter().find(|m| m.relative_path == "hello.txt").unwrap();
+    assert_eq!(hello_meta.entry_type, 0);
+    // parse_mzar_metadata should resolve to original size via MzcHeader
+    assert_eq!(hello_meta.size, b"Hello, Non-Solid MZAR!".len() as u64,
+        "비솔리드 메타데이터의 원본 크기가 올바르지 않습니다.");
+
+    // Extract the non-solid archive directly
+    extract_archive(&non_solid_archive, &dest_dir, None, None)
+        .expect("비솔리드 아카이브 추출 실패");
+
+    // Verify full roundtrip correctness
+    assert_dirs_equal(&src_dir, &dest_dir);
+
+    // Verify individual file content
+    assert_eq!(fs::read(dest_dir.join("hello.txt")).unwrap(), b"Hello, Non-Solid MZAR!");
+    assert_eq!(fs::read(dest_dir.join("data.bin")).unwrap(), &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
+    assert_eq!(fs::read(dest_dir.join("subdir").join("nested.txt")).unwrap(), b"Nested file content for non-solid test.");
+    assert_eq!(fs::read(dest_dir.join("dup_a.txt")).unwrap(), b"Duplicate content here");
+    assert_eq!(fs::read(dest_dir.join("dup_b.txt")).unwrap(), b"Duplicate content here");
+
+    // Verify single-file extraction from non-solid archive
+    let single = mzc::archive::extract_single_file_from_mzar(
+        &non_solid_archive, "subdir/nested.txt", None, None
+    ).unwrap();
+    assert_eq!(single, b"Nested file content for non-solid test.");
+
+    // Verify decompress_non_solid_archive produces a valid raw MZAR
+    let raw_mzar = decompress_non_solid_archive(&non_solid_archive, None, None)
+        .expect("비솔리드 아카이브 디코딩 실패");
+    assert!(is_mzar_archive(&raw_mzar), "디코딩된 Raw MZAR이 유효하지 않습니다.");
+
+    // The raw MZAR should also extract correctly
+    let dest_dir2 = create_unique_temp_dir("non_solid_roundtrip_dest2");
+    extract_archive(&raw_mzar, &dest_dir2, None, None)
+        .expect("Raw MZAR 아카이브 추출 실패");
+    assert_dirs_equal(&src_dir, &dest_dir2);
+
+    cleanup_temp_dir(&src_dir);
+    cleanup_temp_dir(&dest_dir);
+    cleanup_temp_dir(&dest_dir2);
+}
 

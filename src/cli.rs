@@ -111,6 +111,14 @@ pub enum Commands {
         /// 압축 파일 암호화용 비밀번호 (AES-256)
         #[arg(long, short = 'p')]
         password: Option<String>,
+
+        /// 솔리드 압축 모드 활성화 (기본값)
+        #[arg(long, default_value_t = true, overrides_with = "non_solid")]
+        solid: bool,
+
+        /// 개별 파일 압축 모드 활성화 (비솔리드)
+        #[arg(long, overrides_with = "solid")]
+        non_solid: bool,
     },
 
     /// MZC 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
@@ -177,6 +185,14 @@ pub enum Commands {
         /// 암호화 테스트용 비밀번호 (AES-256)
         #[arg(long, short = 'p')]
         password: Option<String>,
+
+        /// 솔리드 압축 모드 활성화 (기본값)
+        #[arg(long, default_value_t = true, overrides_with = "non_solid")]
+        solid: bool,
+
+        /// 개별 파일 압축 모드 활성화 (비솔리드)
+        #[arg(long, overrides_with = "solid")]
+        non_solid: bool,
     },
 
     /// 다수의 원본 텍스트/바이너리 샘플로부터 공유 사전을 생성하여 파일로 저장합니다.

@@ -138,6 +138,7 @@ pub struct MzcGuiApp {
     entropy_mode: EntropyMode,
     dict_path: Option<PathBuf>, // MZC7 대응 외부 선택 사전 경로
     password: String,
+    solid_compression: bool,
 
     // 비동기 작업용 채널 및 상태
     status: String,
@@ -274,6 +275,7 @@ impl MzcGuiApp {
             entropy_mode: EntropyMode::Huffman,
             dict_path: None,
             password: String::new(),
+            solid_compression: true,
             status: "파일을 끌어다 놓거나 아래에서 선택해 주세요.".to_string(),
             is_processing: false,
             task_sender,
@@ -577,248 +579,254 @@ impl MzcGuiApp {
         lpc: bool,
         dict_path: Option<PathBuf>,
         password: Option<String>,
+        solid: bool,
     ) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || {
-            // 원본 바이트 로드 (폴더인 경우 아카이빙 진행)
-            let read_res = if path.is_dir() {
-                crate::archive::archive_directory(&path).map_err(|e| e.to_string())
+            // 지정된 사전 파일 로드
+            let dict_bytes = if let Some(ref d_path) = dict_path {
+                std::fs::read(d_path).ok()
             } else {
-                std::fs::read(&path).map_err(|e| e.to_string())
+                None
+            };
+
+            // 원본 바이트 로드 (폴더인 경우 아카이빙 진행)
+            let read_res = if !solid {
+                let params = crate::archive::CompressionParams {
+                    mode,
+                    entropy,
+                    level,
+                    delta,
+                    bcj,
+                    png,
+                    lpc,
+                    bwt: false,
+                    dict_data: dict_bytes.as_deref(),
+                    password: password.as_deref(),
+                };
+                crate::archive::archive_paths_custom(&[path.clone()], Some(&params)).map_err(|e| e.to_string())
+            } else {
+                if path.is_dir() {
+                    crate::archive::archive_directory(&path).map_err(|e| e.to_string())
+                } else {
+                    std::fs::read(&path).map_err(|e| e.to_string())
+                }
             };
 
             match read_res {
                 Ok(original_bytes) => {
-                    let orig_size = original_bytes.len() as u64;
-                    let sha256 = crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
-
-                    // 지정된 사전 파일 로드
-                    let dict_bytes = if let Some(ref d_path) = dict_path {
-                        std::fs::read(d_path).ok()
-                    } else {
-                        None
-                    };
-
-                    // 실시간 청크 전송 콜백과 함께 라이브러리 압축 구동
-                    let tx_progress = tx.clone();
-                    let final_output = crate::compress_bytes_v2_with_progress_dict_password(
-                        &original_bytes,
-                        mode,
-                        entropy,
-                        level,
-                        delta,
-                        bcj,
-                        png,
-                        lpc,
-                        false, // bwt
-                        dict_bytes.as_deref(),
-                        password.as_deref(),
-                        move |chunk_idx, orig_size, comp_size, duration| {
-                            let _ = tx_progress.send(TaskResult::ChunkProgress {
-                                chunk_idx,
-                                orig_size,
-                                comp_size,
-                                duration,
-                            });
-                        },
-                    );
-
-                    let comp_size = final_output.len() as u64;
-                    let ratio = if orig_size > 0 {
-                        (comp_size as f64 / orig_size as f64) * 100.0
-                    } else {
-                        100.0
-                    };
-
-                    // 이진 블록 맵 시각화를 위한 압축파일 해독 파싱 진행
                     let mut visual_blocks = Vec::new();
                     let mut literal_count = 0;
                     let mut run_count = 0;
                     let mut token_count = 0;
                     let mut backref_count = 0;
+                    let mut format_desc = String::new();
 
-                    let mut version_mzc7 = false;
-                    let mut version_mzc5 = false;
-                    if let Ok(header) = MzcHeader::from_bytes(&final_output) {
-                        version_mzc7 = header.version == VERSION_MZC7;
-                        version_mzc5 = header.version == VERSION_MZC5;
-                        let header_size = if header.version >= VERSION_MZC2 {
-                            HEADER_SIZE_MZC2
-                        } else {
-                            HEADER_SIZE_MZC1
-                        };
-                        let payload_bytes = &final_output[header_size..];
+                    let (final_output, orig_size, mzar_meta, mzar_raw_bytes, sha256) = if !solid {
+                        let raw_mzar = crate::archive::decompress_non_solid_archive(&original_bytes, password.as_deref(), dict_bytes.as_deref())
+                            .unwrap_or_else(|_| original_bytes.clone());
+                        let meta = crate::archive::parse_mzar_metadata(&original_bytes).ok();
+                        let total_orig_size = meta.as_ref().map(|list| list.iter().map(|e| if e.is_dir { 0 } else { e.size }).sum::<u64>()).unwrap_or(0);
+                        let sha = crate::checksum::bytes_to_hex(&calculate_sha256(&raw_mzar));
+                        format_desc = "MZAR (Non-Solid Archiving Container)".to_string();
+                        (original_bytes, total_orig_size, meta, Some(raw_mzar), sha)
+                    } else {
+                        let orig_size = original_bytes.len() as u64;
+                        let sha256_orig = crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
 
-                        // MZC2~MZC7의 구조화 블록들을 따라가며 레이아웃을 역으로 추적합니다.
-                        if header.version >= VERSION_MZC2 && header.original_size > 0 {
-                            let mut pos = header.dictionary_size as usize;
-                            let n = payload_bytes.len();
-                            while pos < n {
-                                if pos + 12 > n {
-                                    break;
-                                }
-                                let chunk_orig_size = u32::from_le_bytes(
-                                    payload_bytes[pos..pos + 4].try_into().unwrap(),
-                                ) as usize;
-                                let comb_size = u32::from_le_bytes(
-                                    payload_bytes[pos + 4..pos + 8].try_into().unwrap(),
-                                ) as usize;
-                                let comp_size = u32::from_le_bytes(
-                                    payload_bytes[pos + 8..pos + 12].try_into().unwrap(),
-                                ) as usize;
-                                pos += 12;
-                                if pos + comp_size > n {
-                                    break;
-                                }
+                        // 실시간 청크 전송 콜백과 함께 라이브러리 압축 구동
+                        let tx_progress = tx.clone();
+                        let final_output = crate::compress_bytes_v2_with_progress_dict_password(
+                            &original_bytes,
+                            mode,
+                            entropy,
+                            level,
+                            delta,
+                            bcj,
+                            png,
+                            lpc,
+                            false, // bwt
+                            dict_bytes.as_deref(),
+                            password.as_deref(),
+                            move |chunk_idx, orig_size, comp_size, duration| {
+                                let _ = tx_progress.send(TaskResult::ChunkProgress {
+                                    chunk_idx,
+                                    orig_size,
+                                    comp_size,
+                                    duration,
+                                });
+                            },
+                        );
 
-                                let chunk_data = &payload_bytes[pos..pos + comp_size];
-                                pos += comp_size;
+                        let mut version_mzc7 = false;
+                        let mut version_mzc5 = false;
+                        if let Ok(header) = MzcHeader::from_bytes(&final_output) {
+                            version_mzc7 = header.version == VERSION_MZC7;
+                            version_mzc5 = header.version == VERSION_MZC5;
+                            let header_size = if header.version >= VERSION_MZC2 {
+                                HEADER_SIZE_MZC2
+                            } else {
+                                HEADER_SIZE_MZC1
+                            };
+                            let payload_bytes = &final_output[header_size..];
 
-                                // 엔트로피 디코딩 판별
-                                let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version
-                                    == VERSION_MZC7
-                                {
-                                    let entropy_bits = (header.algorithm_type >> 2) & 0x07;
-                                    (
-                                        entropy_bits == 1,
-                                        entropy_bits == 2,
-                                        entropy_bits == 3,
-                                        entropy_bits == 4,
-                                    )
-                                } else {
-                                    (
-                                        header.version < VERSION_MZC7
-                                            && chunk_data.len() != comb_size
-                                            && (header.version != VERSION_MZC4
-                                                && (header.version < VERSION_MZC5
-                                                    || (header.algorithm_type
-                                                        & FILTER_DYNAMIC_HUFFMAN)
-                                                        == 0)
-                                                && (header.version < VERSION_MZC6
-                                                    || (header.algorithm_type & FILTER_ANS) == 0)),
-                                        header.version == VERSION_MZC4
-                                            || (header.version >= VERSION_MZC5
-                                                && (header.algorithm_type
-                                                    & FILTER_DYNAMIC_HUFFMAN)
-                                                    != 0),
-                                        header.version >= VERSION_MZC6
-                                            && (header.algorithm_type & FILTER_ANS) != 0,
-                                        false,
-                                    )
-                                };
-
-                                let unhuff = if is_cm {
-                                    crate::cm::cm_decompress(chunk_data, comb_size)
-                                        .unwrap_or_else(|_| chunk_data.to_vec())
-                                } else if is_ans {
-                                    crate::ans::ans_decompress(chunk_data, comb_size)
-                                        .unwrap_or_else(|_| chunk_data.to_vec())
-                                } else if is_dynamic {
-                                    huffman_decompress_dynamic(chunk_data, comb_size)
-                                        .unwrap_or_else(|_| chunk_data.to_vec())
-                                } else if is_huffman {
-                                    huffman_decompress(chunk_data, comb_size)
-                                        .unwrap_or_else(|_| chunk_data.to_vec())
-                                } else {
-                                    chunk_data.to_vec()
-                                };
-
-                                // 로컬/전역 사전을 확보합니다.
-                                let (_dict, rle_payload) = if header.dictionary_size > 0 {
-                                    let g_dict = if let Some(ref d_bytes) = dict_bytes {
-                                        Dictionary::from_bytes(d_bytes).unwrap_or_default()
-                                    } else {
-                                        Dictionary::new()
-                                    };
-                                    (g_dict, unhuff)
-                                } else {
-                                    let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
-                                    let dict_bytes_len = dict.to_bytes().len();
-                                    if dict_bytes_len < unhuff.len() {
-                                        (dict, unhuff[dict_bytes_len..].to_vec())
-                                    } else {
-                                        (dict, Vec::new())
+                            // MZC2~MZC7의 구조화 블록들을 따라가며 레이아웃을 역으로 추적합니다.
+                            if header.version >= VERSION_MZC2 && header.original_size > 0 {
+                                let mut pos = header.dictionary_size as usize;
+                                let n = payload_bytes.len();
+                                while pos < n {
+                                    if pos + 12 > n {
+                                        break;
                                     }
-                                };
+                                    let chunk_orig_size = u32::from_le_bytes(
+                                        payload_bytes[pos..pos + 4].try_into().unwrap(),
+                                    ) as usize;
+                                    let comb_size = u32::from_le_bytes(
+                                        payload_bytes[pos + 4..pos + 8].try_into().unwrap(),
+                                    ) as usize;
+                                    let comp_size = u32::from_le_bytes(
+                                        payload_bytes[pos + 8..pos + 12].try_into().unwrap(),
+                                    ) as usize;
+                                    pos += 12;
+                                    if pos + comp_size > n {
+                                        break;
+                                    }
 
-                                // 블록 순회 파싱
-                                if !rle_payload.is_empty() {
+                                    let chunk_data = &payload_bytes[pos..pos + comp_size];
+                                    pos += comp_size;
+
+                                    // 엔트로피 디코딩 판별
+                                    let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version
+                                        == VERSION_MZC7
+                                    {
+                                        let entropy_bits = (header.algorithm_type >> 2) & 0x07;
+                                        (
+                                            entropy_bits == 1,
+                                            entropy_bits == 2,
+                                            entropy_bits == 3,
+                                            entropy_bits == 4,
+                                        )
+                                    } else {
+                                        (
+                                            header.version < VERSION_MZC7
+                                                && chunk_data.len() != comb_size
+                                                && (header.version != VERSION_MZC4
+                                                    && (header.version < VERSION_MZC5
+                                                        || (header.algorithm_type
+                                                            & FILTER_DYNAMIC_HUFFMAN)
+                                                            == 0)
+                                                    && (header.version < VERSION_MZC6
+                                                        || (header.algorithm_type & FILTER_ANS) == 0)),
+                                            header.version == VERSION_MZC4
+                                                || (header.version >= VERSION_MZC5
+                                                    && (header.algorithm_type
+                                                        & FILTER_DYNAMIC_HUFFMAN)
+                                                        != 0),
+                                            header.version >= VERSION_MZC6
+                                                && (header.algorithm_type & FILTER_ANS) != 0,
+                                            false,
+                                        )
+                                    };
+
+                                    let unhuff = if is_cm {
+                                        crate::cm::cm_decompress(chunk_data, comb_size)
+                                            .unwrap_or_else(|_| chunk_data.to_vec())
+                                    } else if is_ans {
+                                        crate::ans::ans_decompress(chunk_data, comb_size)
+                                            .unwrap_or_else(|_| chunk_data.to_vec())
+                                    } else if is_dynamic {
+                                        huffman_decompress_dynamic(chunk_data, comb_size)
+                                            .unwrap_or_else(|_| chunk_data.to_vec())
+                                    } else if is_huffman {
+                                        huffman_decompress(chunk_data, comb_size)
+                                            .unwrap_or_else(|_| chunk_data.to_vec())
+                                    } else {
+                                        chunk_data.to_vec()
+                                    };
+
+                                    // 로컬/전역 사전을 확보합니다.
+                                    let (_dict, rle_payload) = if header.dictionary_size > 0 {
+                                        let g_dict = if let Some(ref d_bytes) = dict_bytes {
+                                            Dictionary::from_bytes(d_bytes).unwrap_or_default()
+                                        } else {
+                                            Dictionary::new()
+                                        };
+                                        (g_dict, unhuff)
+                                    } else {
+                                        let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
+                                        let dict_bytes_len = dict.to_bytes().len();
+                                        if dict_bytes_len < unhuff.len() {
+                                            (dict, unhuff[dict_bytes_len..].to_vec())
+                                        } else {
+                                            (dict, Vec::new())
+                                        }
+                                    };
+
                                     let mut b_pos = 0;
                                     let b_n = rle_payload.len();
                                     let mut decomp_size = 0;
 
                                     if header.version >= VERSION_MZC5 {
+                                        // MZC5~MZC7 비트 패킹 블록 파싱
                                         while b_pos < b_n && decomp_size < chunk_orig_size {
-                                            if b_pos + 2 > b_n {
-                                                break;
-                                            }
-                                            let flag = u16::from_le_bytes(
-                                                rle_payload[b_pos..b_pos + 2].try_into().unwrap(),
-                                            );
-                                            b_pos += 2;
-
-                                            for k in 0..8 {
-                                                if decomp_size >= chunk_orig_size {
-                                                    break;
+                                            let control = rle_payload[b_pos];
+                                            b_pos += 1;
+                                            match control {
+                                                0x00 => {
+                                                    if b_pos + 2 > b_n {
+                                                        break;
+                                                    }
+                                                    let b_len = u16::from_le_bytes(
+                                                        rle_payload[b_pos..b_pos + 2]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 2 + b_len;
+                                                    decomp_size += b_len;
+                                                    literal_count += 1;
+                                                    visual_blocks.push('L');
                                                 }
-                                                let b_type = ((flag >> (2 * k)) & 0x03) as u8;
-                                                match b_type {
-                                                    0x00 => {
-                                                        if b_pos + 2 > b_n {
-                                                            break;
-                                                        }
-                                                        let b_len = u16::from_le_bytes(
-                                                            rle_payload[b_pos..b_pos + 2]
-                                                                .try_into()
-                                                                .unwrap(),
-                                                        )
-                                                            as usize;
-                                                        b_pos += 2 + b_len;
-                                                        decomp_size += b_len;
-                                                        literal_count += 1;
-                                                        visual_blocks.push('L');
+                                                0x01 => {
+                                                    if b_pos + 3 > b_n {
+                                                        break;
                                                     }
-                                                    0x01 => {
-                                                        if b_pos + 3 > b_n {
-                                                            break;
-                                                        }
-                                                        let b_len = u16::from_le_bytes(
-                                                            rle_payload[b_pos..b_pos + 2]
-                                                                .try_into()
-                                                                .unwrap(),
-                                                        )
-                                                            as usize;
-                                                        b_pos += 3;
-                                                        decomp_size += b_len;
-                                                        run_count += 1;
-                                                        visual_blocks.push('R');
-                                                    }
-                                                    0x02 => {
-                                                        if b_pos + 2 > b_n {
-                                                            break;
-                                                        }
-                                                        b_pos += 2;
-                                                        decomp_size += 2; // 가상 토큰 크기 가정
-                                                        token_count += 1;
-                                                        visual_blocks.push('T');
-                                                    }
-                                                    0x03 => {
-                                                        if b_pos + 4 > b_n {
-                                                            break;
-                                                        }
-                                                        let length = u16::from_le_bytes(
-                                                            rle_payload[b_pos + 2..b_pos + 4]
-                                                                .try_into()
-                                                                .unwrap(),
-                                                        )
-                                                            as usize;
-                                                        b_pos += 4;
-                                                        decomp_size += length;
-                                                        backref_count += 1;
-                                                        visual_blocks.push('B');
-                                                    }
-                                                    _ => break,
+                                                    let b_len = u16::from_le_bytes(
+                                                        rle_payload[b_pos..b_pos + 2]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 3;
+                                                    decomp_size += b_len;
+                                                    run_count += 1;
+                                                    visual_blocks.push('R');
                                                 }
+                                                0x02 => {
+                                                    if b_pos + 2 > b_n {
+                                                        break;
+                                                    }
+                                                    b_pos += 2;
+                                                    decomp_size += 2; // 가상 토큰 크기 가정
+                                                    token_count += 1;
+                                                    visual_blocks.push('T');
+                                                }
+                                                0x03 => {
+                                                    if b_pos + 4 > b_n {
+                                                        break;
+                                                    }
+                                                    let length = u16::from_le_bytes(
+                                                        rle_payload[b_pos + 2..b_pos + 4]
+                                                            .try_into()
+                                                            .unwrap(),
+                                                    )
+                                                        as usize;
+                                                    b_pos += 4;
+                                                    decomp_size += length;
+                                                    backref_count += 1;
+                                                    visual_blocks.push('B');
+                                                }
+                                                _ => break,
                                             }
                                         }
                                     } else {
@@ -863,25 +871,27 @@ impl MzcGuiApp {
                                 }
                             }
                         }
-                    }
+
+                        format_desc = if version_mzc7 {
+                            "MZC7 - Context Mixing & Media Filters Spec".to_string()
+                        } else if version_mzc5 {
+                            "MZC5 - Bit-Packed & Preprocessors Spec".to_string()
+                        } else if entropy == EntropyMode::Dynamic {
+                            "MZC4 - Dynamic Huffman Spec".to_string()
+                        } else if mode == CompressionMode::Lz77 {
+                            "MZC3 - Sliding Window Chunk Spec".to_string()
+                        } else if mode == CompressionMode::Rle && entropy == EntropyMode::None {
+                            "MZC1 - Retro RLE Spec".to_string()
+                        } else {
+                            "MZC2 - Parallel Dictionary Spec".to_string()
+                        };
+
+                        (final_output, orig_size, None, None, sha256_orig)
+                    };
 
                     // 파일 저장
                     let mut saved_path = path.clone();
                     saved_path.set_extension("mzc");
-
-                    let format_desc = if version_mzc7 {
-                        "MZC7 - Context Mixing & Media Filters Spec".to_string()
-                    } else if version_mzc5 {
-                        "MZC5 - Bit-Packed & Preprocessors Spec".to_string()
-                    } else if entropy == EntropyMode::Dynamic {
-                        "MZC4 - Dynamic Huffman Spec".to_string()
-                    } else if mode == CompressionMode::Lz77 {
-                        "MZC3 - Sliding Window Chunk Spec".to_string()
-                    } else if mode == CompressionMode::Rle && entropy == EntropyMode::None {
-                        "MZC1 - Retro RLE Spec".to_string()
-                    } else {
-                        "MZC2 - Parallel Dictionary Spec".to_string()
-                    };
 
                     let alg_desc = match mode {
                         CompressionMode::Rle => "RLE Only Mode",
@@ -891,19 +901,34 @@ impl MzcGuiApp {
                     }
                     .to_string();
 
-                    let mzar_meta = if crate::archive::is_mzar_archive(&original_bytes) {
-                        crate::archive::parse_mzar_metadata(&original_bytes).ok()
+                    let (mzar_meta_final, mzar_raw_bytes_final) = if !solid {
+                        (mzar_meta, mzar_raw_bytes)
                     } else {
-                        None
-                    };
-
-                    let mzar_raw_bytes = if crate::archive::is_mzar_archive(&original_bytes) {
-                        Some(original_bytes.clone())
-                    } else {
-                        None
+                        // In solid mode, final_output is the MZC compressed output.
+                        // Check if the pre-compression data was an MZAR archive by
+                        // looking at the sha256 source.
+                        // We need to re-read the original file to check MZAR status.
+                        let raw = std::fs::read(&path).ok();
+                        if let Some(ref raw_data) = raw {
+                            if crate::archive::is_mzar_archive(raw_data) {
+                                let meta = crate::archive::parse_mzar_metadata(raw_data).ok();
+                                (meta, Some(raw_data.clone()))
+                            } else {
+                                (None, None)
+                            }
+                        } else {
+                            (None, None)
+                        }
                     };
 
                     let entropy_plot_points = Some(compute_local_entropy(&final_output));
+
+                    let comp_size = final_output.len() as u64;
+                    let ratio = if orig_size > 0 {
+                        comp_size as f64 / orig_size as f64
+                    } else {
+                        0.0
+                    };
 
                     match std::fs::write(&saved_path, &final_output) {
                         Ok(_) => {
@@ -920,8 +945,8 @@ impl MzcGuiApp {
                                 saved_path,
                                 format_desc,
                                 alg_desc,
-                                mzar_meta,
-                                mzar_raw_bytes,
+                                mzar_meta: mzar_meta_final,
+                                mzar_raw_bytes: mzar_raw_bytes_final,
                                 entropy_plot_points,
                             });
                         }
@@ -957,7 +982,7 @@ impl MzcGuiApp {
                         let mut saved_path = path.clone();
                         let write_res = if crate::archive::is_mzar_archive(&restored_bytes) {
                             saved_path.set_extension("extracted");
-                            crate::archive::extract_archive(&restored_bytes, &saved_path)
+                            crate::archive::extract_archive(&restored_bytes, &saved_path, password.as_deref(), dict_bytes.as_deref())
                                 .map_err(|e| e.to_string())
                         } else {
                             saved_path.set_extension("restored.txt");
@@ -1695,6 +1720,28 @@ impl MzcGuiApp {
 
 impl eframe::App for MzcGuiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 드래그 앤 드롭 파일 처리
+        ctx.input(|i| {
+            if !i.raw.dropped_files.is_empty() {
+                for dropped in &i.raw.dropped_files {
+                    if let Some(ref path) = dropped.path {
+                        if self.active_tab == 2 {
+                            if !self.train_files.contains(path) {
+                                self.train_files.push(path.clone());
+                            }
+                        } else {
+                            self.input_path = Some(path.clone());
+                            self.status = format!(
+                                "선택 파일 (드롭): {:?}",
+                                path.file_name().unwrap_or(path.as_os_str())
+                            );
+                            self.update_mzar_metadata();
+                        }
+                    }
+                }
+            }
+        });
+
         // 비동기 작업 채널에서 수신한 비동기 결과를 상태 변수에 연동
         if let Ok(result) = self.task_receiver.try_recv() {
             match result {
@@ -2021,6 +2068,8 @@ impl eframe::App for MzcGuiApp {
                             .store(self.simd_enabled, std::sync::atomic::Ordering::Relaxed);
                     }
 
+                    ui.checkbox(&mut self.solid_compression, "솔리드 압축 모드 활성화");
+
                     // 상호 배타 필터 충돌 방지 연동 제어
                     if self.png_enabled {
                         self.lpc_enabled = false;
@@ -2163,6 +2212,7 @@ impl eframe::App for MzcGuiApp {
                                 self.lpc_enabled,
                                 self.dict_path.clone(),
                                 pwd_opt.clone(),
+                                self.solid_compression,
                             );
                         }
 
@@ -2648,7 +2698,9 @@ impl eframe::App for MzcGuiApp {
                                                     .set_file_name(file_basename)
                                                     .save_file()
                                                 {
-                                                    match crate::archive::extract_single_file_from_mzar(mzar_bytes, &node.name) {
+                                                    let pwd_opt = if self.password.is_empty() { None } else { Some(self.password.as_str()) };
+                                                    let dict_bytes = self.dict_path.as_ref().and_then(|p| std::fs::read(p).ok());
+                                                    match crate::archive::extract_single_file_from_mzar(mzar_bytes, &node.name, pwd_opt, dict_bytes.as_deref()) {
                                                         Ok(file_data) => {
                                                             if let Err(e) = std::fs::write(&dest_path, file_data) {
                                                                 self.toast_message = format!("❌ 파일 저장 에러: {}", e);
