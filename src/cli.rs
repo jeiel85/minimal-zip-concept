@@ -213,6 +213,13 @@ pub enum Commands {
         output_file: PathBuf,
     },
 
+    /// 여러 압축 설정을 적용하여 원본 파일의 압축속도 및 압축율을 벤치마크하고 테이블로 표시합니다.
+    Bench {
+        /// 벤치마크할 원본 파일 경로
+        #[arg(value_name = "INPUT_FILE")]
+        input_file: PathBuf,
+    },
+
     /// MZC 그래픽 데스크톱 앱(GUI)을 실행합니다.
     Gui,
 

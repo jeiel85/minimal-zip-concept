@@ -445,3 +445,40 @@ fn test_zip_slip_defense_absolute_path() {
 
     cleanup_temp_dir(&dest_dir);
 }
+
+// ================== 8. parse_mzar_metadata 검증 ==================
+
+#[test]
+fn test_parse_mzar_metadata() {
+    let src_dir = create_unique_temp_dir("parse_metadata");
+
+    // 파일 생성
+    fs::write(src_dir.join("file1.txt"), b"some data").unwrap();
+    fs::create_dir_all(src_dir.join("subdir")).unwrap();
+    fs::write(src_dir.join("subdir").join("file2.dat"), b"more data").unwrap();
+
+    let archive_bytes = archive_directory(&src_dir).expect("아카이브 생성 실패");
+
+    let meta = mzc::archive::parse_mzar_metadata(&archive_bytes).expect("메타데이터 파싱 실패");
+    
+    assert_eq!(meta.len(), 3);
+    
+    // Sort metadata by relative path to make verification deterministic
+    let mut sorted_meta = meta.clone();
+    sorted_meta.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    
+    assert_eq!(sorted_meta[0].relative_path, "file1.txt");
+    assert_eq!(sorted_meta[0].is_dir, false);
+    assert_eq!(sorted_meta[0].size, 9);
+    
+    assert_eq!(sorted_meta[1].relative_path, "subdir");
+    assert_eq!(sorted_meta[1].is_dir, true);
+    assert_eq!(sorted_meta[1].size, 0);
+    
+    assert_eq!(sorted_meta[2].relative_path, "subdir/file2.dat");
+    assert_eq!(sorted_meta[2].is_dir, false);
+    assert_eq!(sorted_meta[2].size, 9);
+
+    cleanup_temp_dir(&src_dir);
+}
+

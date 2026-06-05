@@ -1,5 +1,5 @@
 use crate::cli::{CompressionMode, EntropyMode};
-use crate::{compress_bytes_v2_with_progress_dict, decompress_bytes_v2_dict};
+use crate::{compress_bytes_v2_with_progress_dict_password, decompress_bytes_v2_dict_password};
 
 #[no_mangle]
 pub extern "C" fn wasm_alloc(size: usize) -> *mut u8 {
@@ -30,11 +30,20 @@ pub extern "C" fn wasm_compress(
     bwt: u8,
     dict_ptr: *const u8,
     dict_len: usize,
+    password_ptr: *const u8,
+    password_len: usize,
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
     let dict_bytes = if !dict_ptr.is_null() && dict_len > 0 {
         Some(unsafe { std::slice::from_raw_parts(dict_ptr, dict_len) })
+    } else {
+        None
+    };
+
+    let password_str = if !password_ptr.is_null() && password_len > 0 {
+        let bytes = unsafe { std::slice::from_raw_parts(password_ptr, password_len) };
+        std::str::from_utf8(bytes).ok()
     } else {
         None
     };
@@ -56,7 +65,7 @@ pub extern "C" fn wasm_compress(
         _ => EntropyMode::Huffman,
     };
 
-    let out_bytes = compress_bytes_v2_with_progress_dict(
+    let out_bytes = compress_bytes_v2_with_progress_dict_password(
         in_bytes,
         comp_mode,
         ent_mode,
@@ -67,6 +76,7 @@ pub extern "C" fn wasm_compress(
         lpc != 0,
         bwt != 0,
         dict_bytes,
+        password_str,
         |_, _, _, _| {},
     );
 
@@ -87,6 +97,8 @@ pub extern "C" fn wasm_decompress(
     in_len: usize,
     dict_ptr: *const u8,
     dict_len: usize,
+    password_ptr: *const u8,
+    password_len: usize,
     out_len_ptr: *mut usize,
 ) -> *mut u8 {
     let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
@@ -96,7 +108,14 @@ pub extern "C" fn wasm_decompress(
         None
     };
 
-    match decompress_bytes_v2_dict(in_bytes, dict_bytes) {
+    let password_str = if !password_ptr.is_null() && password_len > 0 {
+        let bytes = unsafe { std::slice::from_raw_parts(password_ptr, password_len) };
+        std::str::from_utf8(bytes).ok()
+    } else {
+        None
+    };
+
+    match decompress_bytes_v2_dict_password(in_bytes, dict_bytes, password_str) {
         Ok(decomp) => {
             let out_len = decomp.len();
             unsafe {
@@ -106,6 +125,41 @@ pub extern "C" fn wasm_decompress(
             let ptr = decomp_vec.as_mut_ptr();
             std::mem::forget(decomp_vec);
             ptr
+        }
+        Err(_) => {
+            unsafe {
+                *out_len_ptr = 0;
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_list_mzar_files(
+    in_ptr: *const u8,
+    in_len: usize,
+    out_len_ptr: *mut usize,
+) -> *mut u8 {
+    let in_bytes = unsafe { std::slice::from_raw_parts(in_ptr, in_len) };
+
+    match crate::archive::parse_mzar_metadata(in_bytes) {
+        Ok(entries) => {
+            if let Ok(json_str) = serde_json::to_string(&entries) {
+                let out_len = json_str.len();
+                unsafe {
+                    *out_len_ptr = out_len;
+                }
+                let mut out_vec = json_str.into_bytes();
+                let ptr = out_vec.as_mut_ptr();
+                std::mem::forget(out_vec);
+                ptr
+            } else {
+                unsafe {
+                    *out_len_ptr = 0;
+                }
+                std::ptr::null_mut()
+            }
         }
         Err(_) => {
             unsafe {

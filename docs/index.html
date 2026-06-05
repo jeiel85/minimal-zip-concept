@@ -729,6 +729,61 @@
                 font-size: 40px;
             }
         }
+
+        /* MZAR File Tree Styles */
+        .mzar-tree-container {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            background: #0d0d11;
+            margin-top: 24px;
+            text-align: left;
+        }
+        .mzar-tree-node {
+            margin: 4px 0;
+        }
+        .mzar-tree-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s, color 0.2s;
+            font-size: 13px;
+        }
+        .mzar-tree-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--primary);
+        }
+        .mzar-tree-item-icon {
+            margin-right: 8px;
+            font-size: 14px;
+            display: inline-block;
+            width: 18px;
+            text-align: center;
+        }
+        .mzar-tree-item-name {
+            flex-grow: 1;
+            font-family: var(--font-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mzar-tree-item-size {
+            color: var(--text-dim);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            margin-left: 10px;
+        }
+        .mzar-tree-node-children {
+            padding-left: 18px;
+            border-left: 1px dashed rgba(255, 255, 255, 0.1);
+            margin-left: 8px;
+        }
+        .mzar-tree-node-collapsed > .mzar-tree-node-children {
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -1060,6 +1115,11 @@
                         </div>
 
                         <div class="options-group">
+                            <label class="options-label">비밀번호 설정 (Encryption/Decryption Password)</label>
+                            <input type="password" id="password-input" class="select-input" placeholder="비밀번호 입력 시 암호화 활성화">
+                        </div>
+
+                        <div class="options-group">
                             <label class="options-label">예측 전처리 필터 (Filters)</label>
                             <div class="checkbox-grid">
                                 <label class="checkbox-label">
@@ -1108,6 +1168,13 @@
                         <a id="download-link" class="btn btn-primary" style="display: none; box-shadow: 0 0 20px var(--primary-glow); margin: 0 auto;" href="#" download>
                             📥 결과 파일 다운로드
                         </a>
+                    </div>
+
+                    <div id="mzar-tree-container" class="mzar-tree-container" style="display: none; margin-bottom: 24px;">
+                        <h4 style="margin-top: 0; color: var(--primary); font-size: 15px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            📁 MZAR 아카이브 내부 파일 트리
+                        </h4>
+                        <div id="mzar-tree-root" style="max-height: 300px; overflow-y: auto;"></div>
                     </div>
 
                     <div class="terminal-box" id="terminal-box">
@@ -1549,7 +1616,7 @@
 
         let uploadedDictData = null;
 
-        function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc, bwt = false) {
+        function runWasmCompress(data, mode, entropy, level, delta, bcj, png, lpc, bwt = false, password = "") {
             if (!wasmInstance) return null;
             
             const { ptr: inPtr, len: inLen } = allocUint8Array(data);
@@ -1561,6 +1628,16 @@
                 const res = allocUint8Array(uploadedDictData);
                 dictPtr = res.ptr;
                 dictLen = res.len;
+            }
+
+            let pwdPtr = 0;
+            let pwdLen = 0;
+            if (password && password.length > 0) {
+                const encoder = new TextEncoder();
+                const pwdBytes = encoder.encode(password);
+                const res = allocUint8Array(pwdBytes);
+                pwdPtr = res.ptr;
+                pwdLen = res.len;
             }
 
             const outPtr = wasmInstance.exports.wasm_compress(
@@ -1576,6 +1653,8 @@
                 bwt ? 1 : 0,
                 dictPtr,
                 dictLen,
+                pwdPtr,
+                pwdLen,
                 outLenPtr
             );
             
@@ -1586,6 +1665,7 @@
                 freePtr(inPtr, inLen);
                 freePtr(outLenPtr, 4);
                 if (dictPtr !== 0) freePtr(dictPtr, dictLen);
+                if (pwdPtr !== 0) freePtr(pwdPtr, pwdLen);
                 return null;
             }
             
@@ -1596,11 +1676,12 @@
             freePtr(outLenPtr, 4);
             freePtr(outPtr, outLen);
             if (dictPtr !== 0) freePtr(dictPtr, dictLen);
+            if (pwdPtr !== 0) freePtr(pwdPtr, pwdLen);
             
             return result;
         }
 
-        function runWasmDecompress(data) {
+        function runWasmDecompress(data, password = "") {
             if (!wasmInstance) return null;
             
             const { ptr: inPtr, len: inLen } = allocUint8Array(data);
@@ -1614,11 +1695,23 @@
                 dictLen = res.len;
             }
 
+            let pwdPtr = 0;
+            let pwdLen = 0;
+            if (password && password.length > 0) {
+                const encoder = new TextEncoder();
+                const pwdBytes = encoder.encode(password);
+                const res = allocUint8Array(pwdBytes);
+                pwdPtr = res.ptr;
+                pwdLen = res.len;
+            }
+
             const outPtr = wasmInstance.exports.wasm_decompress(
                 inPtr,
                 inLen,
                 dictPtr,
                 dictLen,
+                pwdPtr,
+                pwdLen,
                 outLenPtr
             );
             
@@ -1629,6 +1722,7 @@
                 freePtr(inPtr, inLen);
                 freePtr(outLenPtr, 4);
                 if (dictPtr !== 0) freePtr(dictPtr, dictLen);
+                if (pwdPtr !== 0) freePtr(pwdPtr, pwdLen);
                 return null;
             }
             
@@ -1639,8 +1733,154 @@
             freePtr(outLenPtr, 4);
             freePtr(outPtr, outLen);
             if (dictPtr !== 0) freePtr(dictPtr, dictLen);
+            if (pwdPtr !== 0) freePtr(pwdPtr, pwdLen);
             
             return result;
+        }
+
+        function runWasmListMzarFiles(data) {
+            if (!wasmInstance || !wasmInstance.exports.wasm_list_mzar_files) return null;
+            
+            const { ptr: inPtr, len: inLen } = allocUint8Array(data);
+            const outLenPtr = wasmInstance.exports.wasm_alloc(4);
+            
+            const outPtr = wasmInstance.exports.wasm_list_mzar_files(
+                inPtr,
+                inLen,
+                outLenPtr
+            );
+            
+            const outLenView = new Uint32Array(wasmMemory.buffer, outLenPtr, 1);
+            const outLen = outLenView[0];
+            
+            if (outPtr === 0 || outLen === 0) {
+                freePtr(inPtr, inLen);
+                freePtr(outLenPtr, 4);
+                return null;
+            }
+            
+            const resultView = new Uint8Array(wasmMemory.buffer, outPtr, outLen);
+            const decoder = new TextDecoder("utf-8");
+            const jsonStr = decoder.decode(resultView);
+            
+            freePtr(inPtr, inLen);
+            freePtr(outLenPtr, 4);
+            freePtr(outPtr, outLen);
+            
+            try {
+                return JSON.parse(jsonStr);
+            } catch (e) {
+                console.error("Failed to parse JSON from wasm_list_mzar_files", e);
+                return null;
+            }
+        }
+
+        function renderTreeNode(node) {
+            const element = document.createElement("div");
+            element.className = "mzar-tree-node";
+            
+            const item = document.createElement("div");
+            item.className = "mzar-tree-item";
+            
+            const icon = document.createElement("span");
+            icon.className = "mzar-tree-item-icon";
+            icon.textContent = node.isDir ? "📁" : "📄";
+            
+            const name = document.createElement("span");
+            name.className = "mzar-tree-item-name";
+            name.textContent = node.name;
+            
+            item.appendChild(icon);
+            item.appendChild(name);
+            
+            if (!node.isDir) {
+                const size = document.createElement("span");
+                size.className = "mzar-tree-item-size";
+                size.textContent = formatBytes(node.size);
+                item.appendChild(size);
+            }
+            
+            element.appendChild(item);
+            
+            const childKeys = Object.keys(node.children);
+            if (childKeys.length > 0) {
+                const childrenContainer = document.createElement("div");
+                childrenContainer.className = "mzar-tree-node-children";
+                
+                childKeys.sort((a, b) => {
+                    const na = node.children[a];
+                    const nb = node.children[b];
+                    if (na.isDir && !nb.isDir) return -1;
+                    if (!na.isDir && nb.isDir) return 1;
+                    return a.localeCompare(b);
+                });
+                
+                for (const key of childKeys) {
+                    childrenContainer.appendChild(renderTreeNode(node.children[key]));
+                }
+                element.appendChild(childrenContainer);
+                
+                item.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    element.classList.toggle("mzar-tree-node-collapsed");
+                    icon.textContent = element.classList.contains("mzar-tree-node-collapsed") ? "📁" : "📂";
+                });
+            }
+            
+            return element;
+        }
+
+        function displayMzarTree(bytes) {
+            const treeContainer = document.getElementById("mzar-tree-container");
+            const treeRoot = document.getElementById("mzar-tree-root");
+            const fileList = runWasmListMzarFiles(bytes);
+            if (fileList && fileList.length > 0) {
+                treeRoot.innerHTML = "";
+                const rootNode = { name: "Archive Root", isDir: true, children: {}, size: 0 };
+                
+                for (const entry of fileList) {
+                    const parts = entry.relative_path.split('/');
+                    let current = rootNode;
+                    for (let i = 0; i < parts.length; i++) {
+                        const part = parts[i];
+                        if (!part) continue;
+                        const isLast = (i === parts.length - 1);
+                        const isDir = isLast ? entry.is_dir : true;
+                        
+                        if (!current.children[part]) {
+                            current.children[part] = {
+                                name: part,
+                                isDir: isDir,
+                                children: {},
+                                size: isLast ? entry.size : 0
+                            };
+                        }
+                        if (isLast) {
+                            current.children[part].size = entry.size;
+                            current.children[part].isDir = entry.is_dir;
+                        }
+                        current = current.children[part];
+                    }
+                }
+                
+                const childKeys = Object.keys(rootNode.children);
+                childKeys.sort((a, b) => {
+                    const na = rootNode.children[a];
+                    const nb = rootNode.children[b];
+                    if (na.isDir && !nb.isDir) return -1;
+                    if (!na.isDir && nb.isDir) return 1;
+                    return a.localeCompare(b);
+                });
+                
+                for (const key of childKeys) {
+                    treeRoot.appendChild(renderTreeNode(rootNode.children[key]));
+                }
+                treeContainer.style.display = "block";
+                resultsPanel.style.display = "block";
+                logToTerminal(`MZAR 아카이브 구조 감지: ${fileList.length}개 파일/폴더 목록 표시 완료.`, "success");
+            } else {
+                treeContainer.style.display = "none";
+            }
         }
 
         // Event listeners
@@ -1745,6 +1985,18 @@
                 decompressBtn.style.opacity = "1";
                 
                 logToTerminal(`파일 선택됨: ${file.name} (${formatBytes(file.size)})`, "info");
+
+                // Check if uploaded file is MZAR archive
+                const isMzar = selectedFileData.length >= 8 &&
+                               selectedFileData[0] === 0x4D &&
+                               selectedFileData[1] === 0x5A &&
+                               selectedFileData[2] === 0x41 &&
+                               selectedFileData[3] === 0x52;
+                if (isMzar) {
+                    displayMzarTree(selectedFileData);
+                } else {
+                    document.getElementById("mzar-tree-container").style.display = "none";
+                }
             };
             reader.readAsArrayBuffer(file);
         }
@@ -1759,15 +2011,16 @@
             const bcj = document.getElementById("filter-bcj").checked;
             const png = document.getElementById("filter-png").checked;
             const lpc = document.getElementById("filter-lpc").checked;
+            const password = document.getElementById("password-input").value;
             
-            logToTerminal(`압축 시작: ${selectedFileName} (Mode=${mode}, Entropy=${entropy}, Level=${level}, Filters: D=${delta}, B=${bcj}, P=${png}, L=${lpc})`, "info");
+            logToTerminal(`압축 시작: ${selectedFileName} (Mode=${mode}, Entropy=${entropy}, Level=${level}, Filters: D=${delta}, B=${bcj}, P=${png}, L=${lpc})${password ? ' [비밀번호 암호화 적용]' : ''}`, "info");
             
             const startTime = performance.now();
-            const compressed = runWasmCompress(selectedFileData, mode, entropy, level, delta, bcj, png, lpc);
+            const compressed = runWasmCompress(selectedFileData, mode, entropy, level, delta, bcj, png, lpc, false, password);
             const elapsed = performance.now() - startTime;
             
             if (!compressed) {
-                logToTerminal("압축 실패: 유효하지 않은 데이터를 반환했습니다.", "warn");
+                logToTerminal("압축 실패: 암호화 처리 중 에러가 발생했거나 올바르지 않은 설정을 반환했습니다.", "warn");
                 return;
             }
             
@@ -1794,20 +2047,24 @@
             downloadLink.download = selectedFileName.endsWith(".mzc") ? selectedFileName : selectedFileName + ".mzc";
             downloadLink.style.display = "inline-flex";
             
+            // Clear tree for the newly compressed file since it is now MZC binary, not unpacked MZAR
+            document.getElementById("mzar-tree-container").style.display = "none";
+            
             resultsPanel.style.display = "block";
         });
 
         decompressBtn.addEventListener("click", () => {
             if (!selectedFileData || !wasmInstance) return;
             
-            logToTerminal(`압축 해제 시작: ${selectedFileName}...`, "info");
+            const password = document.getElementById("password-input").value;
+            logToTerminal(`압축 해제 시작: ${selectedFileName}...${password ? ' [비밀번호 입력됨]' : ''}`, "info");
             
             const startTime = performance.now();
-            const decompressed = runWasmDecompress(selectedFileData);
+            const decompressed = runWasmDecompress(selectedFileData, password);
             const elapsed = performance.now() - startTime;
             
             if (!decompressed) {
-                logToTerminal("압축 해제 실패: 올바른 MZC 압축 파일이 아니거나 복원 중 오류가 발생했습니다.", "warn");
+                logToTerminal("압축 해제 실패: 비밀번호가 잘못되었거나 올바른 MZC 압축 파일이 아닙니다.", "warn");
                 return;
             }
             
@@ -1832,6 +2089,18 @@
             downloadLink.href = url;
             downloadLink.download = selectedFileName.endsWith(".mzc") ? selectedFileName.slice(0, -4) : "restored_" + selectedFileName;
             downloadLink.style.display = "inline-flex";
+            
+            // If the decompressed output is MZAR, render tree
+            const isMzar = decompressed.length >= 8 &&
+                           decompressed[0] === 0x4D &&
+                           decompressed[1] === 0x5A &&
+                           decompressed[2] === 0x41 &&
+                           decompressed[3] === 0x52;
+            if (isMzar) {
+                displayMzarTree(decompressed);
+            } else {
+                document.getElementById("mzar-tree-container").style.display = "none";
+            }
             
             resultsPanel.style.display = "block";
         });

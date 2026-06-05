@@ -29,6 +29,7 @@ fn main() -> Result<()> {
             "train",
             "inspect",
             "inflate",
+            "bench",
             "gui",
             "register-context-menu",
             "unregister-context-menu",
@@ -440,6 +441,108 @@ fn main() -> Result<()> {
                 "압축 해제 및 복구 완료! 복원 파일 크기: {} bytes",
                 decompressed.len()
             );
+        }
+
+        // --- MZC 설정 매트릭스 벤치마크 (Bench) 서브커맨드 실행 분기 ---
+        Commands::Bench { input_file } => {
+            println!("MZC Multi-Configuration Benchmarking Tool");
+            println!("Target File: {:?}", input_file);
+
+            let data = fs::read(&input_file)
+                .with_context(|| format!("벤치마크 대상 파일 '{:?}'을 읽을 수 없습니다.", input_file))?;
+            let orig_size = data.len();
+            if orig_size == 0 {
+                println!("Error: Empty files cannot be benchmarked.");
+                return Ok(());
+            }
+            println!("Original Size: {} bytes", orig_size);
+            println!("Running compression configurations matrix...\n");
+
+            struct BenchResult {
+                name: String,
+                comp_size: usize,
+                ratio: f64,
+                comp_time_ms: f64,
+                decomp_time_ms: f64,
+                status: String,
+            }
+
+            // 비교할 압축 설정 조합 매트릭스 정의
+            let matrix = vec![
+                ("MZC1: Rle + None", mzc::CompressionMode::Rle, mzc::EntropyMode::None, false, false, false),
+                ("MZC2: Hybrid + Huffman", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Huffman, false, false, false),
+                ("MZC4: Hybrid + Dynamic", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Dynamic, false, false, false),
+                ("MZC6: Hybrid + ANS", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Ans, false, false, false),
+                ("MZC7: Hybrid + CM", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Cm, false, false, false),
+                ("MZC3: LZ77 + Huffman", mzc::CompressionMode::Lz77, mzc::EntropyMode::Huffman, false, false, false),
+                ("MZC4: LZ77 + Dynamic", mzc::CompressionMode::Lz77, mzc::EntropyMode::Dynamic, false, false, false),
+                ("MZC6: LZ77 + ANS", mzc::CompressionMode::Lz77, mzc::EntropyMode::Ans, false, false, false),
+                ("MZC7: LZ77 + CM", mzc::CompressionMode::Lz77, mzc::EntropyMode::Cm, false, false, false),
+                ("MZC7: LZ77 + CM + BWT", mzc::CompressionMode::Lz77, mzc::EntropyMode::Cm, false, false, true),
+                ("MZC5: LZ77 + Dynamic + Delta + BCJ", mzc::CompressionMode::Lz77, mzc::EntropyMode::Dynamic, true, true, false),
+            ];
+
+            let mut results = Vec::new();
+
+            for (name, mode, entropy, delta, bcj, bwt) in matrix {
+                print!("Running {}... ", name);
+                std::io::Write::flush(&mut std::io::stdout())?;
+
+                let start_comp = std::time::Instant::now();
+                let compressed = mzc::compress_bytes_v2_with_progress_dict_password(
+                    &data,
+                    mode,
+                    entropy,
+                    6,
+                    delta,
+                    bcj,
+                    false, // png
+                    false, // lpc
+                    bwt,
+                    None,
+                    None,
+                    |_, _, _, _| {},
+                );
+                let comp_time = start_comp.elapsed().as_secs_f64() * 1000.0;
+                let comp_size = compressed.len();
+                let ratio = (comp_size as f64 / orig_size as f64) * 100.0;
+
+                let start_decomp = std::time::Instant::now();
+                let decompressed = mzc::decompress_bytes_v2_dict_password(&compressed, None, None);
+                let decomp_time = start_decomp.elapsed().as_secs_f64() * 1000.0;
+
+                let status = match decompressed {
+                    Ok(ref restored) if restored == &data => "OK".to_string(),
+                    Ok(_) => "MISMATCH".to_string(),
+                    Err(e) => format!("FAIL ({})", e),
+                };
+
+                println!("Done! Ratio: {:.2}%, C_Time: {:.1}ms", ratio, comp_time);
+
+                results.push(BenchResult {
+                    name: name.to_string(),
+                    comp_size,
+                    ratio,
+                    comp_time_ms: comp_time,
+                    decomp_time_ms: decomp_time,
+                    status,
+                });
+            }
+
+            // 압축비 기준 오름차순(우수한 압축률 우선) 정렬
+            results.sort_by(|a, b| a.ratio.partial_cmp(&b.ratio).unwrap());
+
+            // 벤치마크 결과 비교 표 출력
+            println!("\n+--------------------------------------+---------------+------------+-----------------+-----------------+--------+");
+            println!("| Configuration                        | Comp Size (B) | Ratio (%)  | Comp Time (ms)  | Dec Time (ms)   | Status |");
+            println!("+--------------------------------------+---------------+------------+-----------------+-----------------+--------+");
+            for res in results {
+                println!(
+                    "| {:<36} | {:>13} | {:>9.2}% | {:>14.1}  | {:>14.1}  | {:<6} |",
+                    res.name, res.comp_size, res.ratio, res.comp_time_ms, res.decomp_time_ms, res.status
+                );
+            }
+            println!("+--------------------------------------+---------------+------------+-----------------+-----------------+--------+");
         }
 
         // --- 데스크톱 그래픽 GUI 애플리케이션 실행 분기 ---

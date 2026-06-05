@@ -376,3 +376,102 @@ fn collect_paths(
 pub fn is_mzar_archive(bytes: &[u8]) -> bool {
     bytes.len() >= 8 && &bytes[0..4] == MZAR_MAGIC
 }
+
+/// **MZAR 아카이브 엔트리의 경량 메타데이터 구조체입니다.**
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MzarEntryMetadata {
+    pub relative_path: String,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+/// **MZAR 바이트 배열을 파싱하여 엔트리 메타데이터의 목록을 가져옵니다 (추출하지 않음).**
+pub fn parse_mzar_metadata(archive_bytes: &[u8]) -> io::Result<Vec<MzarEntryMetadata>> {
+    if archive_bytes.len() < 8 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "MZAR 데이터가 너무 짧습니다.",
+        ));
+    }
+
+    // 1. Magic bytes 확인
+    if &archive_bytes[0..4] != MZAR_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "유효한 MZAR 아카이브가 아닙니다.",
+        ));
+    }
+
+    // 2. Entry 개수 읽기
+    let mut entry_count_bytes = [0u8; 4];
+    entry_count_bytes.copy_from_slice(&archive_bytes[4..8]);
+    let entry_count = u32::from_le_bytes(entry_count_bytes);
+
+    let mut cursor = 8;
+    let data_len = archive_bytes.len();
+    let mut entries = Vec::new();
+
+    for _ in 0..entry_count {
+        if cursor + 2 > data_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "엔트리 헤더 읽기 실패: 경량 헤더",
+            ));
+        }
+
+        // 경로 길이 (2B)
+        let mut path_len_bytes = [0u8; 2];
+        path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 2]);
+        let path_len = u16::from_le_bytes(path_len_bytes) as usize;
+        cursor += 2;
+
+        if cursor + path_len > data_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "상대 경로 바이트 읽기 실패",
+            ));
+        }
+
+        // 경로명 디코딩
+        let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor + path_len])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
+            .to_string();
+        cursor += path_len;
+
+        if cursor + 9 > data_len {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "메타데이터 플래그 읽기 실패",
+            ));
+        }
+
+        // 디렉토리 여부 (1B)
+        let is_dir = archive_bytes[cursor] == 1;
+        cursor += 1;
+
+        // 파일 크기 (8B)
+        let mut file_size_bytes = [0u8; 8];
+        file_size_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 8]);
+        let file_size = u64::from_le_bytes(file_size_bytes);
+        cursor += 8;
+
+        entries.push(MzarEntryMetadata {
+            relative_path: path_str,
+            is_dir,
+            size: file_size,
+        });
+
+        if !is_dir {
+            if cursor + (file_size as usize) > data_len {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "파일 데이터 범위를 초과했습니다.",
+                ));
+            }
+            cursor += file_size as usize;
+        }
+    }
+
+    Ok(entries)
+}
+

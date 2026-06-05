@@ -60,6 +60,7 @@ enum TaskResult {
         saved_path: PathBuf,
         format_desc: String,
         alg_desc: String,
+        mzar_meta: Option<Vec<crate::archive::MzarEntryMetadata>>,
     },
     DecompressDone {
         restored_size: u64,
@@ -79,6 +80,7 @@ enum TaskResult {
         backref_count: usize,
         format_desc: String,
         alg_desc: String,
+        mzar_meta: Option<Vec<crate::archive::MzarEntryMetadata>>,
     },
     ChunkProgress {
         chunk_idx: usize,
@@ -240,6 +242,9 @@ pub struct MzcGuiApp {
     // 토스트 알림 배너 상태
     toast_message: String,
     toast_start_time: Option<std::time::Instant>,
+
+    // MZAR 아카이브 내부 파일 트리맵 시각화 데이터
+    mzar_metadata: Option<Vec<crate::archive::MzarEntryMetadata>>,
 }
 
 impl MzcGuiApp {
@@ -343,6 +348,30 @@ impl MzcGuiApp {
             // 토스트 알림 배너 초기화
             toast_message: String::new(),
             toast_start_time: None,
+
+            // MZAR 아카이브 내부 파일 트리맵 시각화 데이터
+            mzar_metadata: None,
+        }
+    }
+
+    fn update_mzar_metadata(&mut self) {
+        self.mzar_metadata = None;
+        if let Some(ref path) = self.input_path {
+            if path.is_dir() {
+                if let Ok(mzar_bytes) = crate::archive::archive_directory(path) {
+                    if let Ok(meta) = crate::archive::parse_mzar_metadata(&mzar_bytes) {
+                        self.mzar_metadata = Some(meta);
+                    }
+                }
+            } else {
+                if let Ok(bytes) = std::fs::read(path) {
+                    if crate::archive::is_mzar_archive(&bytes) {
+                        if let Ok(meta) = crate::archive::parse_mzar_metadata(&bytes) {
+                            self.mzar_metadata = Some(meta);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -845,6 +874,12 @@ impl MzcGuiApp {
                     }
                     .to_string();
 
+                    let mzar_meta = if crate::archive::is_mzar_archive(&original_bytes) {
+                        crate::archive::parse_mzar_metadata(&original_bytes).ok()
+                    } else {
+                        None
+                    };
+
                     match std::fs::write(&saved_path, &final_output) {
                         Ok(_) => {
                             let _ = tx.send(TaskResult::CompressDone {
@@ -860,6 +895,7 @@ impl MzcGuiApp {
                                 saved_path,
                                 format_desc,
                                 alg_desc,
+                                mzar_meta,
                             });
                         }
                         Err(e) => {
@@ -927,7 +963,7 @@ impl MzcGuiApp {
     }
 
     /// **비동기 분석(Inspect) 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
-    fn spawn_inspect_task(&self, path: PathBuf, dict_path: Option<PathBuf>) {
+    fn spawn_inspect_task(&self, path: PathBuf, dict_path: Option<PathBuf>, password: Option<String>) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || match std::fs::read(&path) {
             Ok(file_bytes) => match MzcHeader::from_bytes(&file_bytes) {
@@ -1262,6 +1298,20 @@ impl MzcGuiApp {
                         }
                     }
 
+                    let decompressed_bytes = crate::decompress_bytes_v2_dict_password(
+                        &file_bytes,
+                        dict_bytes.as_deref(),
+                        password.as_deref()
+                    ).ok();
+
+                    let mzar_meta = decompressed_bytes.and_then(|bytes| {
+                        if crate::archive::is_mzar_archive(&bytes) {
+                            crate::archive::parse_mzar_metadata(&bytes).ok()
+                        } else {
+                            None
+                        }
+                    });
+
                     let orig_size = header.original_size;
                     let comp_size = file_bytes.len() as u64;
                     let ratio = if orig_size > 0 {
@@ -1284,6 +1334,7 @@ impl MzcGuiApp {
                         backref_count,
                         format_desc: format_desc.to_string(),
                         alg_desc,
+                        mzar_meta,
                     });
                 }
                 Err(e) => {
@@ -1660,6 +1711,7 @@ impl eframe::App for MzcGuiApp {
                     saved_path,
                     format_desc,
                     alg_desc,
+                    mzar_meta,
                 } => {
                     self.is_processing = false;
                     self.original_size = orig_size;
@@ -1674,6 +1726,7 @@ impl eframe::App for MzcGuiApp {
                     self.verified_ok = true;
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
+                    self.mzar_metadata = mzar_meta;
                     self.status = format!(
                         "압축 성공! 저장됨: {:?}",
                         saved_path.file_name().unwrap_or(saved_path.as_os_str())
@@ -1720,6 +1773,7 @@ impl eframe::App for MzcGuiApp {
                     backref_count,
                     format_desc,
                     alg_desc,
+                    mzar_meta,
                 } => {
                     self.is_processing = false;
                     self.original_size = orig_size;
@@ -1734,6 +1788,7 @@ impl eframe::App for MzcGuiApp {
                     self.backref_count = backref_count;
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
+                    self.mzar_metadata = mzar_meta;
                     self.status =
                         "압축 데이터 분석 및 체크섬 무손실 검증에 완벽히 성공했습니다!".to_string();
                 }
@@ -2000,6 +2055,7 @@ impl eframe::App for MzcGuiApp {
                                 "선택 파일: {:?}",
                                 path.file_name().unwrap_or(path.as_os_str())
                             );
+                            self.update_mzar_metadata();
                         }
                     }
 
@@ -2010,6 +2066,7 @@ impl eframe::App for MzcGuiApp {
                                 "선택 폴더: {:?} (MZAR 아카이브 압축 대상)",
                                 path.file_name().unwrap_or(path.as_os_str())
                             );
+                            self.update_mzar_metadata();
                         }
                     }
 
@@ -2093,7 +2150,8 @@ impl eframe::App for MzcGuiApp {
                         if inspect_btn.clicked() {
                             self.is_processing = true;
                             self.status = "MZC 구조화 매직 검출 및 헤더 분석 중...".to_string();
-                            self.spawn_inspect_task(path.clone(), self.dict_path.clone());
+                            let pwd_opt = if self.password.is_empty() { None } else { Some(self.password.clone()) };
+                            self.spawn_inspect_task(path.clone(), self.dict_path.clone(), pwd_opt);
                         }
                     } else {
                         ui.colored_label(
@@ -2426,6 +2484,113 @@ impl eframe::App for MzcGuiApp {
                             ui.label("블록 실측 카운트: 대기 중");
                         }
                     });
+
+                    ui.add_space(10.0);
+
+                    // 아카이브 트리맵 시각화
+                    if let Some(ref mzar_meta) = self.mzar_metadata {
+                        ui.group(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "📊 MZAR 아카이브 내부 파일 크기 분포 (TreeMap Visualizer)");
+                            ui.separator();
+
+                            let files: Vec<(String, u64)> = mzar_meta
+                                .iter()
+                                .filter(|m| !m.is_dir)
+                                .map(|m| (m.relative_path.clone(), m.size))
+                                .collect();
+
+                            if files.is_empty() {
+                                ui.label("아카이브에 파일 엔트리가 없습니다.");
+                            } else {
+                                let total_size: u64 = files.iter().map(|(_, size)| *size).sum();
+                                let desired_size = egui::vec2(ui.available_width(), 160.0);
+                                let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                                let painter = ui.painter();
+
+                                // Draw background
+                                painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(20, 20, 25));
+
+                                let treemap_nodes = layout_treemap(rect, &files);
+
+                                for node in treemap_nodes {
+                                    let fill_color = match node.ext.as_str() {
+                                        // Code files (Green-ish)
+                                        "rs" | "py" | "js" | "html" | "css" | "c" | "cpp" | "h" | "go" | "java" => {
+                                            egui::Color32::from_rgb(46, 117, 89)
+                                        }
+                                        // Binary / Compressed (Blue-ish)
+                                        "zip" | "tar" | "gz" | "mzc" | "exe" | "dll" | "so" | "bin" => {
+                                            egui::Color32::from_rgb(33, 91, 166)
+                                        }
+                                        // Documents (Red-ish)
+                                        "md" | "txt" | "pdf" | "doc" | "docx" | "json" | "toml" | "xml" => {
+                                            egui::Color32::from_rgb(166, 58, 58)
+                                        }
+                                        // Images (Yellow-ish)
+                                        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "svg" | "webp" => {
+                                            egui::Color32::from_rgb(166, 126, 33)
+                                        }
+                                        // Default (Gray)
+                                        _ => egui::Color32::from_rgb(70, 70, 75),
+                                    };
+
+                                    let box_rect = node.rect.shrink(1.0);
+                                    let is_hovered = response.hover_pos().map(|hp| box_rect.contains(hp)).unwrap_or(false);
+
+                                    let fill = if is_hovered {
+                                        egui::Color32::from_rgb(
+                                            fill_color.r().saturating_add(30),
+                                            fill_color.g().saturating_add(30),
+                                            fill_color.b().saturating_add(30),
+                                        )
+                                    } else {
+                                        fill_color
+                                    };
+
+                                    painter.rect_filled(box_rect, 2.0, fill);
+                                    painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(10, 10, 12)));
+
+                                    if box_rect.width() > 30.0 && box_rect.height() > 14.0 {
+                                        let file_basename = std::path::Path::new(&node.name)
+                                            .file_name()
+                                            .and_then(|f| f.to_str())
+                                            .unwrap_or(&node.name);
+
+                                        let font_size = if box_rect.width() > 80.0 { 11.0 } else { 9.0 };
+                                        let display_name = if file_basename.len() > (box_rect.width() as usize / 7) {
+                                            let limit = (box_rect.width() as usize / 7).max(3) - 3;
+                                            format!("{}..", &file_basename[..limit.min(file_basename.len())])
+                                        } else {
+                                            file_basename.to_string()
+                                        };
+
+                                        painter.text(
+                                            box_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            display_name,
+                                            egui::FontId::proportional(font_size),
+                                            egui::Color32::WHITE,
+                                        );
+                                    }
+
+                                    if is_hovered {
+                                        let share = if total_size > 0 {
+                                            (node.size as f64 / total_size as f64) * 100.0
+                                        } else {
+                                            0.0
+                                        };
+
+                                        egui::show_tooltip(ui.ctx(), response.id, |ui| {
+                                            ui.label(format!("파일 경로: {}", node.name));
+                                            ui.label(format!("파일 크기: {} bytes ({:.2}%)", node.size, share));
+                                            ui.label(format!("확장자: {}", if node.ext.is_empty() { "없음" } else { &node.ext }));
+                                        });
+                                    }
+                                }
+                            }
+                        });
+                        ui.add_space(10.0);
+                    }
 
                     ui.add_space(10.0);
 
@@ -3432,4 +3597,98 @@ fn is_newer_version(new_ver: &str, current_ver: &str) -> bool {
         }
     }
     new_parts.len() > curr_parts.len()
+}
+
+// TreeMap Visualizer Helper Logic
+#[derive(Debug, Clone)]
+struct TreeMapNode {
+    name: String,
+    size: u64,
+    rect: egui::Rect,
+    ext: String,
+}
+
+fn layout_treemap(rect: egui::Rect, files: &[(String, u64)]) -> Vec<TreeMapNode> {
+    let mut nodes = Vec::new();
+    if files.is_empty() {
+        return nodes;
+    }
+    let total_size: u64 = files.iter().map(|(_, size)| *size).sum();
+    if total_size == 0 {
+        return nodes;
+    }
+    let mut sorted_files = files.to_vec();
+    sorted_files.sort_by(|a, b| b.1.cmp(&a.1));
+    slice_and_dice(rect, &sorted_files, total_size, 0, &mut nodes);
+    nodes
+}
+
+fn slice_and_dice(
+    rect: egui::Rect,
+    files: &[(String, u64)],
+    total_size: u64,
+    depth: usize,
+    nodes: &mut Vec<TreeMapNode>,
+) {
+    if files.is_empty() || total_size == 0 {
+        return;
+    }
+    if files.len() == 1 {
+        let path = &files[0].0;
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        nodes.push(TreeMapNode {
+            name: path.clone(),
+            size: files[0].1,
+            rect,
+            ext,
+        });
+        return;
+    }
+
+    let mut split_idx = 0;
+    let mut current_sum = 0;
+    let half_size = total_size / 2;
+    for (i, (_, size)) in files.iter().enumerate() {
+        current_sum += *size;
+        if current_sum >= half_size {
+            split_idx = i;
+            break;
+        }
+    }
+    if split_idx == files.len() - 1 {
+        split_idx = files.len() / 2;
+    }
+    if split_idx == 0 {
+        split_idx = 1;
+    }
+
+    let left_files = &files[..split_idx];
+    let right_files = &files[split_idx..];
+    let left_size: u64 = left_files.iter().map(|(_, size)| *size).sum();
+    let right_size: u64 = right_files.iter().map(|(_, size)| *size).sum();
+    let left_ratio = left_size as f32 / total_size as f32;
+
+    if rect.width() > rect.height() {
+        let left_width = rect.width() * left_ratio;
+        let left_rect = egui::Rect::from_min_size(rect.min, egui::vec2(left_width, rect.height()));
+        let right_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x + left_width, rect.min.y),
+            egui::vec2(rect.width() - left_width, rect.height()),
+        );
+        slice_and_dice(left_rect, left_files, left_size, depth + 1, nodes);
+        slice_and_dice(right_rect, right_files, right_size, depth + 1, nodes);
+    } else {
+        let left_height = rect.height() * left_ratio;
+        let left_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), left_height));
+        let right_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.min.x, rect.min.y + left_height),
+            egui::vec2(rect.width(), rect.height() - left_height),
+        );
+        slice_and_dice(left_rect, left_files, left_size, depth + 1, nodes);
+        slice_and_dice(right_rect, right_files, right_size, depth + 1, nodes);
+    }
 }
