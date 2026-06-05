@@ -81,13 +81,14 @@ Lossless compression ratio benchmarks comparing MZC7 (with Context Mixing and pr
 
 | Dataset Category | MZC1 (RLE) | MZC3 (LZ77) | MZC7 (Context Mixing) | Gzip (flate2 Default) | Zstd (Level 3) |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| 📝 **Text (Plain)** | 100.04% | 6.84% | **10.14%** | 3.35% | 3.49% |
-| 🎧 **Audio (WAV)** | 100.04% | 83.71% | **37.90%** 🏆 | 75.73% | 70.06% |
-| 🖼️ **Image (BMP)** | 100.04% | 5.85% | **8.19%** | 3.86% | 5.02% |
-| 💻 **Executable (Bin)** | 100.04% | 94.37% | **84.53%** | 82.90% | 75.41% |
+| 📝 **Text (Plain)** | 100.04% | 6.84% | **9.37%** | 3.35% | 3.49% |
+| 🎧 **Audio (WAV)** | 100.04% | 83.72% | **35.20%** 🏆 | 75.73% | 70.06% |
+| 🖼️ **Image (BMP)** | 100.04% | 5.85% | **8.20%** | 3.86% | 5.02% |
+| 💻 **Executable (Bin)** | 100.04% | 94.46% | **84.48%** | 82.90% | 75.41% |
 
 > [!TIP]
-> **Exceptional Audio Compression Ratio**: On 16-bit PCM audio streams, the combination of MZC7's **LPC preprocessor** and **Context Mixing arithmetic range coder** reduces data to **37.90%** of its original size, massively outperforming industry standards like Gzip (75.73%) and Zstd (70.06%).
+> **Exceptional Audio Compression Ratio**: On 16-bit PCM audio streams, the combination of MZC7's **LPC preprocessor** and **Context Mixing arithmetic range coder** reduces data to **35.20%** of its original size, massively outperforming industry standards like Gzip (75.73%) and Zstd (70.06%). For the full benchmark results including compression speeds, refer to the [Benchmark Reports](file:///d:/Project/minimal-zip-concept/docs/benchmark_results.md).
+
 
 ---
 
