@@ -110,9 +110,35 @@ EOF
           mzc-setup.exe
         if-no-files-found: ignore
 
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        target: wasm32-unknown-unknown
+
+    - name: Build WASM binary
+      run: cargo build --lib --target wasm32-unknown-unknown --release
+
+    - name: Package WASM
+      run: |
+        mkdir -p wasm-dist
+        cp target/wasm32-unknown-unknown/release/mzc.wasm wasm-dist/
+
+    - name: Upload WASM Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: mzc-wasm
+        path: wasm-dist/mzc.wasm
+
   create-github-release:
     name: Create GitHub Release
-    needs: build-release
+    needs: [build-release, build-wasm]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
@@ -129,6 +155,7 @@ EOF
           */*.zip
           */*.deb
           */mzc-setup.exe
+          */mzc.wasm
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

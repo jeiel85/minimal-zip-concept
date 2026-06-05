@@ -87,7 +87,27 @@ Lossless compression ratio benchmarks comparing MZC7 (with Context Mixing and pr
 | 💻 **Executable (Bin)** | 100.04% | 94.46% | **84.48%** | 82.90% | 75.41% |
 
 > [!TIP]
-> **Exceptional Audio Compression Ratio**: On 16-bit PCM audio streams, the combination of MZC7's **LPC preprocessor** and **Context Mixing arithmetic range coder** reduces data to **35.20%** of its original size, massively outperforming industry standards like Gzip (75.73%) and Zstd (70.06%). For the full benchmark results including compression speeds, refer to the [Benchmark Reports](file:///d:/Project/minimal-zip-concept/docs/benchmark_results.md).
+> **Exceptional Audio Compression Ratio**: On 16-bit PCM audio streams, the combination of MZC7's **LPC preprocessor** and **Context Mixing arithmetic range coder** reduces data to **35.20%** of its original size, massively outperforming industry standards like Gzip (75.73%) and Zstd (70.06%). For the full benchmark results including compression speeds, refer to the [Benchmark Reports](docs/benchmark_results.md).
+
+### 2.1 Internal Criterion Benchmarks (v0.11.1 SIMD Optimization)
+
+Performance improvements after applying **AVX2/NEON SIMD acceleration** and **Radix Suffix Array** optimization in v0.11.1 (`cargo bench` results).
+
+| Benchmark | Time | Change vs. Previous | Status |
+| :--- | :---: | :---: | :---: |
+| `compress_text/MZC2_LZ77` | 28.2 ms | **-36.1%** | ✅ Improved |
+| `compress_repeats/MZC2_LZ77` | 6.76 ms | **-59.7%** | ✅ Improved |
+| `compress_text/MZC4_Deflate` | 12.84 ms | **-63.7%** | ✅ Improved |
+| `compress_repeats/MZC4_Deflate` | 6.39 ms | **-67.3%** | ✅ Improved |
+| `compress_text/MZC5_tANS` | 12.99 ms | **-64.2%** | ✅ Improved |
+| `compress_repeats/MZC5_tANS` | 21.78 ms | **-52.7%** | ✅ Improved |
+| `compress_text/MZC7_CM` | 22.66 ms | **-48.5%** | ✅ Improved |
+| `compress_repeats/MZC7_CM` | 10.67 ms | **-51.8%** | ✅ Improved |
+| `micro/bwt_apply` | 1.37 ms | **-67.8%** | ✅ Improved |
+| `micro/cm_compress` | 3.24 ms | **-61.5%** | ✅ Improved |
+
+> [!NOTE]
+> **36–68% speedup across all algorithms**: Achieved by applying AVX2 `_mm256_mullo_epi32` / NEON `vmulq_s32` SIMD intrinsics to the CM weight mixing loop, and replacing BWT suffix arrays with $O(N \log N)$ radix sort.
 
 
 ---
@@ -208,9 +228,10 @@ graph TD
     Lib --> Rle[src/rle.rs: packing, lazy matches, RLE, LZ77, core filters]
     Lib --> Huffman[src/huffman.rs: static/dynamic trees]
     Lib --> Ans[src/ans.rs: tANS entropy coder]
-    Lib --> CM[src/cm.rs: context mixing range coder]
+    Lib --> CM["src/cm.rs: CM range coder (AVX2/NEON SIMD)"]
     Lib --> Filters[src/filters.rs: PNG/LPC prediction filters]
     Lib --> Deflate[src/deflate.rs: GZIP/DEFLATE decoder]
     Lib --> Checksum[src/checksum.rs: SHA-256 calculator]
     Lib --> Inspect[src/inspect.rs: metadata inspector]
+    Lib --> WASM[src/wasm.rs: WebAssembly bindings]
 ```

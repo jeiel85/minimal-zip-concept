@@ -88,7 +88,27 @@ MZC7(컨텍스트 믹싱 및 미디어 필터) 사양을 기준으로 업계 표
 | 💻 **실행 파일 (Executable)** | 100.04% | 94.46% | **84.48%** | 82.90% | 75.41% |
 
 > [!TIP]
-> **오디오 데이터셋의 독보적인 압축률**: 오디오 파일(16-bit PCM WAV)의 경우, MZC7에 탑재된 **LPC(선형 예측) 필터**와 **산술 레인지 코더**의 결합을 통해 업계 표준인 Gzip(75.73%) 및 Zstd(70.06%) 대비 **35.20%**라는 압축 효율을 달성하여 압도적인 성능적 우위를 보여줍니다. 전체 포맷별 상세 벤치마크 비교 데이터는 [벤치마크 결과 명세서](file:///d:/Project/minimal-zip-concept/docs/benchmark_results.md)를 참고하시기 바랍니다.
+> **오디오 데이터셋의 독보적인 압축률**: 오디오 파일(16-bit PCM WAV)의 경우, MZC7에 탑재된 **LPC(선형 예측) 필터**와 **산술 레인지 코더**의 결합을 통해 업계 표준인 Gzip(75.73%) 및 Zstd(70.06%) 대비 **35.20%**라는 압축 효율을 달성하여 압도적인 성능적 우위를 보여줍니다. 전체 포맷별 상세 벤치마크 비교 데이터는 [벤치마크 결과 명세서](docs/benchmark_results.md)를 참고하시기 바랍니다.
+
+### 2.1 내부 Criterion 벤치마크 (v0.11.1 SIMD 최적화)
+
+v0.11.1에서 적용된 **AVX2/NEON SIMD 가속** 및 **Radix Suffix Array** 최적화 후 `cargo bench` 결과입니다.
+
+| 벤치마크 | 소요 시간 | 이전 대비 변화 | 상태 |
+| :--- | :---: | :---: | :---: |
+| `compress_text/MZC2_LZ77` | 28.2 ms | **-36.1%** | ✅ 향상 |
+| `compress_repeats/MZC2_LZ77` | 6.76 ms | **-59.7%** | ✅ 향상 |
+| `compress_text/MZC4_Deflate` | 12.84 ms | **-63.7%** | ✅ 향상 |
+| `compress_repeats/MZC4_Deflate` | 6.39 ms | **-67.3%** | ✅ 향상 |
+| `compress_text/MZC5_tANS` | 12.99 ms | **-64.2%** | ✅ 향상 |
+| `compress_repeats/MZC5_tANS` | 21.78 ms | **-52.7%** | ✅ 향상 |
+| `compress_text/MZC7_CM` | 22.66 ms | **-48.5%** | ✅ 향상 |
+| `compress_repeats/MZC7_CM` | 10.67 ms | **-51.8%** | ✅ 향상 |
+| `micro/bwt_apply` | 1.37 ms | **-67.8%** | ✅ 향상 |
+| `micro/cm_compress` | 3.24 ms | **-61.5%** | ✅ 향상 |
+
+> [!NOTE]
+> **전 알고리즘 36~68% 속도 향상**: CM 레인지 코더의 가중치 혼합 루프에 AVX2 `_mm256_mullo_epi32` / NEON `vmulq_s32` SIMD 명령어를 적용하고, BWT 접미사 배열을 $O(N \log N)$ Radix Sort 방식으로 교체한 결과입니다.
 
 
 ---
@@ -207,9 +227,10 @@ graph TD
     Lib --> Rle[src/rle.rs: 패킹, 지연매치, RLE, LZ77, 필터 코어]
     Lib --> Huffman[src/huffman.rs: Dynamic/Static 허프만 트리]
     Lib --> Ans[src/ans.rs: tANS 부호화 엔진]
-    Lib --> CM[src/cm.rs: 컨텍스트 믹싱 산술 코더]
+    Lib --> CM["src/cm.rs: CM 산술 코더 (AVX2/NEON SIMD)"]
     Lib --> Filters[src/filters.rs: PNG/LPC 미디어 예측 필터]
     Lib --> Deflate[src/deflate.rs: GZIP/DEFLATE 디코더]
     Lib --> Checksum[src/checksum.rs: SHA-256 체크섬 계산]
     Lib --> Inspect[src/inspect.rs: 인스펙터 분석 엔진]
+    Lib --> WASM[src/wasm.rs: WebAssembly 바인딩]
 ```
