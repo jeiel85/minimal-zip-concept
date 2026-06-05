@@ -445,3 +445,165 @@ pub fn inverse_lpc_filter(data: &mut [u8]) {
         data[2 * i + 1] = bytes[1];
     }
 }
+
+/// **BWT 연산을 위한 Suffix Array (접미사 배열) 생성 (Manber-Myers O(N log^2 N) 알고리즘 - 순환 교대 정렬)**
+fn suffix_array(s: &[u8]) -> Vec<usize> {
+    let n = s.len();
+    let mut sa: Vec<usize> = (0..n).collect();
+    let mut rank: Vec<usize> = s.iter().map(|&x| x as usize + 1).collect();
+    let mut tmp = vec![0; n];
+    let mut k = 1;
+    while k < n {
+        sa.sort_by(|&i, &j| {
+            if rank[i] != rank[j] {
+                rank[i].cmp(&rank[j])
+            } else {
+                let ri = rank[(i + k) % n];
+                let rj = rank[(j + k) % n];
+                ri.cmp(&rj)
+            }
+        });
+        tmp[sa[0]] = 1;
+        for i in 1..n {
+            let prev = sa[i - 1];
+            let curr = sa[i];
+            let same = rank[prev] == rank[curr]
+                && rank[(prev + k) % n] == rank[(curr + k) % n];
+            tmp[curr] = tmp[prev] + (if same { 0 } else { 1 });
+        }
+        rank.copy_from_slice(&tmp);
+        if rank[sa[n - 1]] == n {
+            break;
+        }
+        k *= 2;
+    }
+    sa
+}
+
+/// **BWT (Burrows-Wheeler Transform) 인코딩**
+pub fn apply_bwt(s: &[u8]) -> (Vec<u8>, usize) {
+    let n = s.len();
+    if n == 0 {
+        return (Vec::new(), 0);
+    }
+    let sa = suffix_array(s);
+    let mut l = Vec::with_capacity(n);
+    let mut primary_index = 0;
+    for i in 0..n {
+        let idx = sa[i];
+        l.push(s[(idx + n - 1) % n]);
+        if idx == 0 {
+            primary_index = i;
+        }
+    }
+    (l, primary_index)
+}
+
+/// **BWT (Burrows-Wheeler Transform) 디코딩**
+pub fn inverse_bwt(l: &[u8], primary_index: usize) -> Vec<u8> {
+    let n = l.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut count = [0; 256];
+    for &c in l {
+        count[c as usize] += 1;
+    }
+    let mut sum = 0;
+    let mut head = [0; 256];
+    for i in 0..256 {
+        head[i] = sum;
+        sum += count[i];
+    }
+    let mut next = vec![0; n];
+    for i in 0..n {
+        let c = l[i] as usize;
+        next[head[c]] = i;
+        head[c] += 1;
+    }
+    let mut s = vec![0; n];
+    let mut curr = next[primary_index];
+    for i in 0..n {
+        s[i] = l[curr];
+        curr = next[curr];
+    }
+    s
+}
+
+/// **MTF (Move-To-Front) 인코딩**
+pub fn apply_mtf(data: &mut [u8]) {
+    let mut list = [0u8; 256];
+    for i in 0..256 {
+        list[i] = i as u8;
+    }
+    for val in data.iter_mut() {
+        let target = *val;
+        let mut idx = 0;
+        for i in 0..256 {
+            if list[i] == target {
+                idx = i;
+                break;
+            }
+        }
+        *val = idx as u8;
+        for i in (1..=idx).rev() {
+            list[i] = list[i - 1];
+        }
+        list[0] = target;
+    }
+}
+
+/// **MTF (Move-To-Front) 디코딩**
+pub fn inverse_mtf(data: &mut [u8]) {
+    let mut list = [0u8; 256];
+    for i in 0..256 {
+        list[i] = i as u8;
+    }
+    for val in data.iter_mut() {
+        let idx = *val as usize;
+        let target = list[idx];
+        *val = target;
+        for i in (1..=idx).rev() {
+            list[i] = list[i - 1];
+        }
+        list[0] = target;
+    }
+}
+
+/// **BWT + MTF 통합 전처리 필터 적용**
+/// - 구조: [4바이트 인덱스] + [MTF(BWT(원본 데이터))]
+pub fn apply_bwt_filter(data: &mut Vec<u8>) {
+    let n = data.len();
+    if n == 0 {
+        return;
+    }
+    let (bwt_output, primary_index) = apply_bwt(data);
+    let mut mtf_output = bwt_output;
+    apply_mtf(&mut mtf_output);
+
+    data.resize(n + 4, 0);
+    let index_bytes = (primary_index as u32).to_le_bytes();
+    data[0..4].copy_from_slice(&index_bytes);
+    data[4..].copy_from_slice(&mtf_output);
+}
+
+/// **BWT + MTF 통합 전처리 필터 해제**
+pub fn inverse_bwt_filter(data: &mut Vec<u8>) {
+    let n = data.len();
+    if n < 4 {
+        return;
+    }
+    let mut index_bytes = [0u8; 4];
+    index_bytes.copy_from_slice(&data[0..4]);
+    let primary_index = u32::from_le_bytes(index_bytes) as usize;
+
+    let mtf_payload = &mut data[4..];
+    inverse_mtf(mtf_payload);
+    let restored = inverse_bwt(mtf_payload, primary_index);
+
+    let orig_len = restored.len();
+    data[0..orig_len].copy_from_slice(&restored);
+    data.truncate(orig_len);
+}
+
+

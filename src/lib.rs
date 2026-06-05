@@ -147,6 +147,7 @@ pub fn compress_bytes_v2_dict(
         bcj,
         png,
         lpc,
+        false, // bwt
         dict_data,
         |_, _, _, _| {},
     )
@@ -176,6 +177,7 @@ where
         bcj,
         png,
         lpc,
+        false, // bwt
         None,
         on_chunk_progress,
     )
@@ -198,6 +200,7 @@ pub fn compress_bytes_v2_with_progress_dict<F>(
     bcj: bool,
     png: bool,
     lpc: bool,
+    bwt: bool,
     dict_data: Option<&[u8]>,
     on_chunk_progress: F,
 ) -> Vec<u8>
@@ -248,8 +251,8 @@ where
         pos = end;
     }
 
-    // MZC7 조건 판단: Context Mixing 엔트로피나 미디어 전용 필터(PNG, LPC)가 켜진 경우 MZC7 규격 적용
-    let is_v7 = entropy == EntropyMode::Cm || png || lpc;
+    // MZC7 조건 판단: Context Mixing 엔트로피나 미디어 전용 필터(PNG, LPC, BWT)가 켜진 경우 MZC7 규격 적용
+    let is_v7 = entropy == EntropyMode::Cm || png || lpc || bwt;
 
     // 2. Rayon 멀티스레드 병렬 압축 맵 수행 (`par_iter()` 활용)
     // - par_iter(): 일반 iter() 대신 사용 시, Rayon이 내부적으로 작업 훔치기(Work-Stealing) 풀을 사용하여
@@ -278,6 +281,8 @@ where
                     filters::apply_png_filter(&mut processed_chunk);
                 } else if lpc {
                     filters::apply_lpc_filter(&mut processed_chunk);
+                } else if bwt {
+                    filters::apply_bwt_filter(&mut processed_chunk);
                 } else {
                     // 미디어 필터가 없으면 기존 Delta/BCJ 필터 적용
                     if bcj {
@@ -412,11 +417,13 @@ where
             EntropyMode::Ans => 3,
             EntropyMode::Cm => 4,
         };
-        // - bits 5-7: 필터 모드 (0 = None, 1 = Delta, 2 = BCJ, 3 = PNG, 4 = LPC, 5 = Delta + BCJ)
+        // - bits 5-7: 필터 모드 (0 = None, 1 = Delta, 2 = BCJ, 3 = PNG, 4 = LPC, 5 = Delta + BCJ, 6 = BWT)
         let filter_bits = if png {
             3
         } else if lpc {
             4
+        } else if bwt {
+            6
         } else if delta && bcj {
             5
         } else if delta {
@@ -766,10 +773,21 @@ where
             };
 
             // RLE / LZ77 블록 압축 해제 복원
-            let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
-                rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_flag, chunk_orig_size)?
+            let filter_bits = if header.version == VERSION_MZC7 {
+                (header.algorithm_type >> 5) & 0x07
             } else {
-                rle_decompress_hybrid(&rle_payload, &dict, alg_flag, chunk_orig_size)?
+                0
+            };
+            let target_size = if filter_bits == 6 {
+                chunk_orig_size + 4
+            } else {
+                chunk_orig_size
+            };
+
+            let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
+                rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_flag, target_size)?
+            } else {
+                rle_decompress_hybrid(&rle_payload, &dict, alg_flag, target_size)?
             };
 
             // 역전처리 필터 적용 (인코딩의 역순)
@@ -792,6 +810,9 @@ where
                         // Delta + BCJ 적용된 역연산
                         rle::inverse_delta_filter(&mut decompressed_chunk);
                         rle::inverse_bcj_filter(&mut decompressed_chunk);
+                    }
+                    6 => {
+                        filters::inverse_bwt_filter(&mut decompressed_chunk);
                     }
                     _ => {}
                 }
@@ -859,10 +880,11 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
     bcj: bool,
     png: bool,
     lpc: bool,
+    bwt: bool,
     dict_data: Option<&[u8]>,
 ) -> Result<(), MzcError> {
     use sha2::{Digest, Sha256};
-    let is_v7 = entropy == EntropyMode::Cm || png || lpc;
+    let is_v7 = entropy == EntropyMode::Cm || png || lpc || bwt;
     // 1. 임시 헤더 영역 (56바이트) 예약 생성
     let header_pos = writer
         .stream_position()
@@ -934,6 +956,8 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
                 filters::apply_png_filter(&mut processed_chunk);
             } else if lpc {
                 filters::apply_lpc_filter(&mut processed_chunk);
+            } else if bwt {
+                filters::apply_bwt_filter(&mut processed_chunk);
             } else {
                 if bcj {
                     rle::apply_bcj_filter(&mut processed_chunk);
@@ -1031,6 +1055,8 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
             3
         } else if lpc {
             4
+        } else if bwt {
+            6
         } else if delta && bcj {
             5
         } else if delta {
@@ -1239,19 +1265,23 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
             alg
         };
 
-        // RLE 디코딩 복원
-        let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
-            rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_type, chunk_orig_size)?
+        let filter_bits = if header.version == VERSION_MZC7 {
+            (header.algorithm_type >> 5) & 0x07
         } else {
-            rle_decompress_hybrid(&rle_payload, &dict, alg_type, chunk_orig_size)?
+            0
+        };
+        let target_size = if filter_bits == 6 {
+            chunk_orig_size + 4
+        } else {
+            chunk_orig_size
         };
 
-        if decompressed_chunk.len() != chunk_orig_size {
-            return Err(MzcError::OriginalSizeMismatch {
-                expected: chunk_orig_size as u64,
-                found: decompressed_chunk.len() as u64,
-            });
-        }
+        // RLE 디코딩 복원
+        let mut decompressed_chunk = if header.version >= VERSION_MZC5 {
+            rle_decompress_hybrid_mzc5(&rle_payload, &dict, alg_type, target_size)?
+        } else {
+            rle_decompress_hybrid(&rle_payload, &dict, alg_type, target_size)?
+        };
 
         // 예측 필터 역복원
         if is_v7 {
@@ -1272,6 +1302,9 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
                 5 => {
                     rle::inverse_delta_filter(&mut decompressed_chunk);
                     rle::inverse_bcj_filter(&mut decompressed_chunk);
+                }
+                6 => {
+                    filters::inverse_bwt_filter(&mut decompressed_chunk);
                 }
                 _ => {}
             }
@@ -1295,6 +1328,13 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
             } else if has_bcj {
                 rle::inverse_bcj_filter(&mut decompressed_chunk);
             }
+        }
+
+        if decompressed_chunk.len() != chunk_orig_size {
+            return Err(MzcError::OriginalSizeMismatch {
+                expected: chunk_orig_size as u64,
+                found: decompressed_chunk.len() as u64,
+            });
         }
 
         // 최종 디코딩 결과 쓰기 및 해시 누적

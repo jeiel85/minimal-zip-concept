@@ -63,6 +63,7 @@ fn main() -> Result<()> {
             bcj,
             png,
             lpc,
+            bwt,
             dict_file,
         } => {
             // 출력 파일 경로 자동 추론
@@ -82,8 +83,8 @@ fn main() -> Result<()> {
             };
 
             println!("압축 시작: {:?} -> {:?}", input_file, out_file);
-            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}",
-                     mode, entropy, level, delta, bcj, png, lpc);
+            println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}",
+                     mode, entropy, level, delta, bcj, png, lpc, bwt);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
@@ -135,6 +136,7 @@ fn main() -> Result<()> {
                     bcj,
                     png,
                     lpc,
+                    bwt,
                     dict_bytes.as_deref(),
                     move |chunk_idx, _total, _, _| {
                         pb_clone.set_position(chunk_idx as u64);
@@ -143,7 +145,7 @@ fn main() -> Result<()> {
                 pb.finish_with_message("압축 완료");
                 result
             } else {
-                mzc::compress_bytes_v2_dict(
+                mzc::compress_bytes_v2_with_progress_dict(
                     &original_bytes,
                     mode,
                     entropy,
@@ -152,7 +154,9 @@ fn main() -> Result<()> {
                     bcj,
                     png,
                     lpc,
+                    bwt,
                     dict_bytes.as_deref(),
+                    |_, _, _, _| {},
                 )
             };
 
@@ -275,11 +279,12 @@ fn main() -> Result<()> {
             bcj,
             png,
             lpc,
+            bwt,
             dict_file,
         } => {
             println!("라운드트립 자가 검증 테스트 시작: {:?}", input_file);
-            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}",
-                     mode, entropy, level, delta, bcj, png, lpc);
+            println!("테스트 알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}",
+                     mode, entropy, level, delta, bcj, png, lpc, bwt);
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
@@ -299,7 +304,7 @@ fn main() -> Result<()> {
             };
 
             // 1. 메모리상에서 즉각 압축
-            let compressed_bytes = mzc::compress_bytes_v2_dict(
+            let compressed_bytes = mzc::compress_bytes_v2_with_progress_dict(
                 &original_bytes,
                 mode,
                 entropy,
@@ -308,7 +313,9 @@ fn main() -> Result<()> {
                 bcj,
                 png,
                 lpc,
+                bwt,
                 dict_bytes.as_deref(),
+                |_, _, _, _| {},
             );
             let total_compressed_size = compressed_bytes.len();
 

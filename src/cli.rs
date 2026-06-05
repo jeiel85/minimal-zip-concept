@@ -100,6 +100,10 @@ pub enum Commands {
         #[arg(long)]
         lpc: bool,
 
+        /// BWT (Burrows-Wheeler Transform) + MTF 필터 전처리 적용 여부 (MZC7 전용)
+        #[arg(long)]
+        bwt: bool,
+
         /// 전역 공유 사전 파일 경로 (옵션)
         #[arg(long = "dict-file", value_name = "DICT_FILE")]
         dict_file: Option<PathBuf>,
@@ -153,6 +157,10 @@ pub enum Commands {
         /// LPC 오디오 선형 예측 필터 전처리 적용 여부 (MZC7 전용)
         #[arg(long)]
         lpc: bool,
+
+        /// BWT (Burrows-Wheeler Transform) + MTF 필터 전처리 적용 여부 (MZC7 전용)
+        #[arg(long)]
+        bwt: bool,
 
         /// 전역 공유 사전 파일 경로 (옵션)
         #[arg(long = "dict-file", value_name = "DICT_FILE")]

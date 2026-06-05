@@ -521,6 +521,7 @@ impl MzcGuiApp {
                         bcj,
                         png,
                         lpc,
+                        false, // bwt
                         dict_bytes.as_deref(),
                         move |chunk_idx, orig_size, comp_size, duration| {
                             let _ = tx_progress.send(TaskResult::ChunkProgress {

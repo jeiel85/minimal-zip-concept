@@ -139,6 +139,7 @@ fn test_streaming_roundtrip() {
         true,
         false,
         false,
+        false, // bwt
         None,
     )
     .expect("Streaming compression failed");
@@ -155,3 +156,43 @@ fn test_streaming_roundtrip() {
     assert_eq!(original_bytes.len(), restored_bytes.len());
     assert_eq!(original_bytes, restored_bytes);
 }
+
+#[test]
+fn test_bwt_mtf_roundtrip() {
+    let mut data = b"banana-split-with-extra-banana-and-split".to_vec();
+    let orig = data.clone();
+
+    // Test BWT + MTF filter roundtrip
+    mzc::filters::apply_bwt_filter(&mut data);
+    assert_ne!(orig, data); // Should be transformed
+
+    mzc::filters::inverse_bwt_filter(&mut data);
+    assert_eq!(orig, data); // Should be restored exactly
+}
+
+#[test]
+fn test_bwt_compress_roundtrip() {
+    let original_bytes = b"Burrows-Wheeler Transform (BWT) rearranges a character string into runs of similar characters. This is extremely useful for compression.".repeat(10);
+    
+    // Compress with BWT enabled
+    let compressed = mzc::compress_bytes_v2_with_progress_dict(
+        &original_bytes,
+        CompressionMode::Lz77,
+        EntropyMode::Cm,
+        6,
+        false,
+        false,
+        false,
+        false,
+        true, // bwt enabled
+        None,
+        |_, _, _, _| {},
+    );
+    assert!(!compressed.is_empty());
+
+    // Decompress and verify
+    let decompressed = mzc::decompress_bytes_v2(&compressed).expect("BWT decompression failed");
+    assert_eq!(original_bytes.len(), decompressed.len());
+    assert_eq!(original_bytes, decompressed);
+}
+
