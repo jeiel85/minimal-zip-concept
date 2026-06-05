@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-06-05
+
+### Added
+- **Solid vs Non-Solid Compression Mode** — support for solid archiving (concatenating all file contents then compressing as a single block, default) and non-solid archiving (compressing each file entry individually then bundling them into an uncompressed MZAR container).
+- **Parallel File Compression** — Rayon-based parallel compression for non-solid mode file entries, yielding massive performance gains on multi-core CPUs.
+- **GUI Drag-and-Drop** — direct drag-and-drop file/directory receiver support in the egui desktop interface.
+- **Auto-detected Decompression** — transparent decompressing/extraction of both solid and non-solid archives without requiring special CLI or GUI flags, using magic-byte signature parsing.
+- **Deduplication Filter** — skipped duplicate file contents in MZAR archives using reference entries mapping back to the first occurrence.
+- **Parallel Extraction** — Rayon-parallelized file write/extraction pipeline, with subsequent sequential duplicate copying.
+- **Shannon Entropy Plot** — 2D sliding-window Shannon Entropy visualization rendered in the GUI Dashboard via `egui_plot`.
+- **SFX Self-Extracting Executables** — package archives into standalone executable binaries (`mzc sfx <payload> <output.exe>`) with automatic startup payload checking, extraction, and optional decryption.
+- **AES-256 Encryption** — password-based security for both archive formats.
+- **Interactive GUI TreeMap** — interactive block visualizer with click-to-extract capability.
+- **CLI Benchmark Command** — benchmark suite (`mzc bench`) for performance testing.
+
 ## [0.11.1] - 2025-06-05
 
 ### Added
