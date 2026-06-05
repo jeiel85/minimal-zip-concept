@@ -61,6 +61,8 @@ enum TaskResult {
         format_desc: String,
         alg_desc: String,
         mzar_meta: Option<Vec<crate::archive::MzarEntryMetadata>>,
+        mzar_raw_bytes: Option<Vec<u8>>,
+        entropy_plot_points: Option<Vec<(f64, f64)>>,
     },
     DecompressDone {
         restored_size: u64,
@@ -81,6 +83,8 @@ enum TaskResult {
         format_desc: String,
         alg_desc: String,
         mzar_meta: Option<Vec<crate::archive::MzarEntryMetadata>>,
+        mzar_raw_bytes: Option<Vec<u8>>,
+        entropy_plot_points: Option<Vec<(f64, f64)>>,
     },
     ChunkProgress {
         chunk_idx: usize,
@@ -245,6 +249,8 @@ pub struct MzcGuiApp {
 
     // MZAR 아카이브 내부 파일 트리맵 시각화 데이터
     mzar_metadata: Option<Vec<crate::archive::MzarEntryMetadata>>,
+    mzar_raw_bytes: Option<Vec<u8>>,
+    entropy_plot_points: Option<Vec<(f64, f64)>>,
 }
 
 impl MzcGuiApp {
@@ -351,16 +357,22 @@ impl MzcGuiApp {
 
             // MZAR 아카이브 내부 파일 트리맵 시각화 데이터
             mzar_metadata: None,
+            mzar_raw_bytes: None,
+            entropy_plot_points: None,
         }
     }
 
     fn update_mzar_metadata(&mut self) {
         self.mzar_metadata = None;
+        self.mzar_raw_bytes = None;
+        self.entropy_plot_points = None;
         if let Some(ref path) = self.input_path {
             if path.is_dir() {
                 if let Ok(mzar_bytes) = crate::archive::archive_directory(path) {
                     if let Ok(meta) = crate::archive::parse_mzar_metadata(&mzar_bytes) {
                         self.mzar_metadata = Some(meta);
+                        self.mzar_raw_bytes = Some(mzar_bytes.clone());
+                        self.entropy_plot_points = Some(compute_local_entropy(&mzar_bytes));
                     }
                 }
             } else {
@@ -368,7 +380,12 @@ impl MzcGuiApp {
                     if crate::archive::is_mzar_archive(&bytes) {
                         if let Ok(meta) = crate::archive::parse_mzar_metadata(&bytes) {
                             self.mzar_metadata = Some(meta);
+                            self.mzar_raw_bytes = Some(bytes.clone());
+                            self.entropy_plot_points = Some(compute_local_entropy(&bytes));
                         }
+                    } else {
+                        // 일반 단일 파일에 대해서도 Shannon Entropy 시각화를 제공합니다.
+                        self.entropy_plot_points = Some(compute_local_entropy(&bytes));
                     }
                 }
             }
@@ -880,6 +897,14 @@ impl MzcGuiApp {
                         None
                     };
 
+                    let mzar_raw_bytes = if crate::archive::is_mzar_archive(&original_bytes) {
+                        Some(original_bytes.clone())
+                    } else {
+                        None
+                    };
+
+                    let entropy_plot_points = Some(compute_local_entropy(&final_output));
+
                     match std::fs::write(&saved_path, &final_output) {
                         Ok(_) => {
                             let _ = tx.send(TaskResult::CompressDone {
@@ -896,6 +921,8 @@ impl MzcGuiApp {
                                 format_desc,
                                 alg_desc,
                                 mzar_meta,
+                                mzar_raw_bytes,
+                                entropy_plot_points,
                             });
                         }
                         Err(e) => {
@@ -1304,13 +1331,23 @@ impl MzcGuiApp {
                         password.as_deref()
                     ).ok();
 
-                    let mzar_meta = decompressed_bytes.and_then(|bytes| {
-                        if crate::archive::is_mzar_archive(&bytes) {
-                            crate::archive::parse_mzar_metadata(&bytes).ok()
+                    let mzar_meta = decompressed_bytes.as_ref().and_then(|bytes| {
+                        if crate::archive::is_mzar_archive(bytes) {
+                            crate::archive::parse_mzar_metadata(bytes).ok()
                         } else {
                             None
                         }
                     });
+
+                    let mzar_raw_bytes = decompressed_bytes.as_ref().and_then(|bytes| {
+                        if crate::archive::is_mzar_archive(bytes) {
+                            Some(bytes.clone())
+                        } else {
+                            None
+                        }
+                    });
+
+                    let entropy_plot_points = Some(compute_local_entropy(&file_bytes));
 
                     let orig_size = header.original_size;
                     let comp_size = file_bytes.len() as u64;
@@ -1335,6 +1372,8 @@ impl MzcGuiApp {
                         format_desc: format_desc.to_string(),
                         alg_desc,
                         mzar_meta,
+                        mzar_raw_bytes,
+                        entropy_plot_points,
                     });
                 }
                 Err(e) => {
@@ -1712,6 +1751,8 @@ impl eframe::App for MzcGuiApp {
                     format_desc,
                     alg_desc,
                     mzar_meta,
+                    mzar_raw_bytes,
+                    entropy_plot_points,
                 } => {
                     self.is_processing = false;
                     self.original_size = orig_size;
@@ -1727,6 +1768,8 @@ impl eframe::App for MzcGuiApp {
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
                     self.mzar_metadata = mzar_meta;
+                    self.mzar_raw_bytes = mzar_raw_bytes;
+                    self.entropy_plot_points = entropy_plot_points;
                     self.status = format!(
                         "압축 성공! 저장됨: {:?}",
                         saved_path.file_name().unwrap_or(saved_path.as_os_str())
@@ -1774,6 +1817,8 @@ impl eframe::App for MzcGuiApp {
                     format_desc,
                     alg_desc,
                     mzar_meta,
+                    mzar_raw_bytes,
+                    entropy_plot_points,
                 } => {
                     self.is_processing = false;
                     self.original_size = orig_size;
@@ -1789,6 +1834,8 @@ impl eframe::App for MzcGuiApp {
                     self.format_description = format_desc;
                     self.algorithm_description = alg_desc;
                     self.mzar_metadata = mzar_meta;
+                    self.mzar_raw_bytes = mzar_raw_bytes;
+                    self.entropy_plot_points = entropy_plot_points;
                     self.status =
                         "압축 데이터 분석 및 체크섬 무손실 검증에 완벽히 성공했습니다!".to_string();
                 }
@@ -2504,7 +2551,7 @@ impl eframe::App for MzcGuiApp {
                             } else {
                                 let total_size: u64 = files.iter().map(|(_, size)| *size).sum();
                                 let desired_size = egui::vec2(ui.available_width(), 160.0);
-                                let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                                let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
                                 let painter = ui.painter();
 
                                 // Draw background
@@ -2538,6 +2585,7 @@ impl eframe::App for MzcGuiApp {
                                     let is_hovered = response.hover_pos().map(|hp| box_rect.contains(hp)).unwrap_or(false);
 
                                     let fill = if is_hovered {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                         egui::Color32::from_rgb(
                                             fill_color.r().saturating_add(30),
                                             fill_color.g().saturating_add(30),
@@ -2584,10 +2632,67 @@ impl eframe::App for MzcGuiApp {
                                             ui.label(format!("파일 경로: {}", node.name));
                                             ui.label(format!("파일 크기: {} bytes ({:.2}%)", node.size, share));
                                             ui.label(format!("확장자: {}", if node.ext.is_empty() { "없음" } else { &node.ext }));
+                                            ui.separator();
+                                            ui.colored_label(egui::Color32::from_rgb(45, 206, 137), "💡 클릭하여 이 파일만 개별 추출");
                                         });
+
+                                        // 클릭 시 단일 파일 개별 추출 구동
+                                        if response.clicked() {
+                                            if let Some(ref mzar_bytes) = self.mzar_raw_bytes {
+                                                let file_basename = std::path::Path::new(&node.name)
+                                                    .file_name()
+                                                    .and_then(|f| f.to_str())
+                                                    .unwrap_or(&node.name);
+
+                                                if let Some(dest_path) = rfd::FileDialog::new()
+                                                    .set_file_name(file_basename)
+                                                    .save_file()
+                                                {
+                                                    match crate::archive::extract_single_file_from_mzar(mzar_bytes, &node.name) {
+                                                        Ok(file_data) => {
+                                                            if let Err(e) = std::fs::write(&dest_path, file_data) {
+                                                                self.toast_message = format!("❌ 파일 저장 에러: {}", e);
+                                                            } else {
+                                                                self.toast_message = format!("✅ 파일 추출 완료: {:?}", dest_path.file_name().unwrap_or(dest_path.as_os_str()));
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            self.toast_message = format!("❌ 파일 추출 에러: {}", e);
+                                                        }
+                                                    }
+                                                    self.toast_start_time = Some(std::time::Instant::now());
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
+                        });
+                        ui.add_space(10.0);
+                    }
+
+                    // 2D Shannon Entropy 시각화 패널 추가
+                    if let Some(ref entropy_points) = self.entropy_plot_points {
+                        ui.group(|ui| {
+                            ui.colored_label(egui::Color32::from_rgb(255, 128, 0), "📉 Shannon Entropy 국소 분포 (Shannon Entropy Plot)");
+                            ui.separator();
+                            ui.label("파일 전체 영역에 걸친 슬라이딩 윈도우 엔트로피 (높을수록 압축률 극대화/랜덤, 낮을수록 정형화)");
+
+                            let plot_points: PlotPoints = entropy_points.iter()
+                                .map(|&(x, y)| [x, y])
+                                .collect();
+
+                            let line = Line::new(plot_points)
+                                .color(egui::Color32::from_rgb(255, 128, 0))
+                                .name("Entropy");
+
+                            Plot::new("entropy_plot")
+                                .height(120.0)
+                                .y_axis_formatter(|val, _chars, _range| format!("{:.1} bits", val.value))
+                                .x_axis_formatter(|val, _chars, _range| format!("{:.0}%", val.value))
+                                .show(ui, |plot_ui| {
+                                    plot_ui.line(line);
+                                });
                         });
                         ui.add_space(10.0);
                     }
@@ -3691,4 +3796,40 @@ fn slice_and_dice(
         slice_and_dice(left_rect, left_files, left_size, depth + 1, nodes);
         slice_and_dice(right_rect, right_files, right_size, depth + 1, nodes);
     }
+}
+
+fn compute_local_entropy(bytes: &[u8]) -> Vec<(f64, f64)> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let file_len = bytes.len();
+    let window_size = if file_len > 10240 {
+        1024
+    } else if file_len > 128 {
+        128
+    } else {
+        16
+    };
+    let step = std::cmp::max(1, file_len / 200);
+    let mut points = Vec::new();
+    let mut i = 0;
+    while i + window_size <= file_len {
+        let window = &bytes[i..i + window_size];
+        let mut counts = [0u32; 256];
+        for &b in window {
+            counts[b as usize] += 1;
+        }
+        let mut entropy = 0.0;
+        let n = window.len() as f64;
+        for &count in &counts {
+            if count > 0 {
+                let p = count as f64 / n;
+                entropy -= p * p.log2();
+            }
+        }
+        let x = (i as f64) / (file_len as f64) * 100.0;
+        points.push((x, entropy));
+        i += step;
+    }
+    points
 }

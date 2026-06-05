@@ -17,6 +17,11 @@ use mzc::inspect::inspect_mzc_file;
 /// - `fn main() -> Result<()>`: 메인 함수는 에러가 발생할 수 있는 `Result` 타입을 반환합니다.
 ///   성공 시 `Ok(())`를, 실패 시 `Err(오류내용)`를 반환하며, CLI 구동 중 생기는 모든 오류는 자동으로 포착되어 터미널에 에러 로그로 표출됩니다.
 fn main() -> Result<()> {
+    // SFX 자가 추출 실행 파일 여부를 먼저 검증합니다.
+    if check_and_run_sfx().context("SFX 자가 추출 실행 과정에서 오류가 발생했습니다.")? {
+        return Ok(());
+    }
+
     // 1. CLI 명령줄 인자를 자동으로 분석하고 파싱합니다.
     // 만약 단일 파일/폴더 경로가 입력되었을 경우 서브커맨드(compress/decompress)를 자동으로 보정하여 제공합니다.
     let mut args: Vec<String> = std::env::args().collect();
@@ -560,7 +565,130 @@ fn main() -> Result<()> {
         Commands::UnregisterContextMenu => {
             mzc::unregister_context_menu()?;
         }
+
+        // --- SFX (Self-Extracting Executable) 생성 서브커맨드 실행 분기 ---
+        Commands::Sfx { mzc_file, out_exe } => {
+            let exe_path = std::env::current_exe()
+                .context("현재 실행 파일 경로를 가져오지 못했습니다.")?;
+
+            let mut exe_file = std::fs::File::open(&exe_path)
+                .context("현재 실행 파일을 열 수 없습니다.")?;
+            let exe_len = exe_file.metadata()?.len();
+
+            let mut read_len = exe_len;
+            if exe_len >= 12 {
+                use std::io::{Seek, SeekFrom, Read};
+                exe_file.seek(SeekFrom::End(-12))?;
+                let mut trailer = [0u8; 12];
+                if exe_file.read_exact(&mut trailer).is_ok() && &trailer[8..12] == b"SFX!" {
+                    let mut size_bytes = [0u8; 8];
+                    size_bytes.copy_from_slice(&trailer[0..8]);
+                    let payload_size = u64::from_le_bytes(size_bytes);
+                    read_len = exe_len - 12 - payload_size;
+                }
+            }
+
+            use std::io::{Seek, SeekFrom, Read};
+            exe_file.seek(SeekFrom::Start(0))?;
+            let mut exe_bytes = vec![0u8; read_len as usize];
+            exe_file.read_exact(&mut exe_bytes)?;
+
+            let mzc_bytes = std::fs::read(&mzc_file)
+                .with_context(|| format!("MZC 파일 '{:?}'을 읽을 수 없습니다.", mzc_file))?;
+
+            let mzc_len = mzc_bytes.len() as u64;
+
+            let mut out_bytes = Vec::new();
+            out_bytes.extend_from_slice(&exe_bytes);
+            out_bytes.extend_from_slice(&mzc_bytes);
+            out_bytes.extend_from_slice(&mzc_len.to_le_bytes());
+            out_bytes.extend_from_slice(b"SFX!");
+
+            std::fs::write(&out_exe, out_bytes)
+                .with_context(|| format!("SFX 실행 파일 '{:?}'을 작성할 수 없습니다.", out_exe))?;
+
+            println!("SFX 실행 파일이 성공적으로 생성되었습니다: {:?}", out_exe);
+        }
     }
 
     Ok(())
 }
+
+/// **현재 바이너리가 SFX 자가 추출 실행 파일인지 탐지하고, 맞을 경우 페이로드를 임시메모리에 복원 후 추출을 구동합니다.**
+fn check_and_run_sfx() -> Result<bool> {
+    let exe_path = std::env::current_exe()?;
+    let file = match std::fs::File::open(&exe_path) {
+        Ok(f) => f,
+        Err(_) => return Ok(false),
+    };
+    let metadata = file.metadata()?;
+    let file_len = metadata.len();
+    if file_len < 12 {
+        return Ok(false);
+    }
+
+    use std::io::{Seek, SeekFrom, Read};
+    let mut file = file;
+    if file.seek(SeekFrom::End(-12)).is_err() {
+        return Ok(false);
+    }
+    let mut trailer = [0u8; 12];
+    if file.read_exact(&mut trailer).is_err() {
+        return Ok(false);
+    }
+
+    if &trailer[8..12] == b"SFX!" {
+        let mut size_bytes = [0u8; 8];
+        size_bytes.copy_from_slice(&trailer[0..8]);
+        let payload_size = u64::from_le_bytes(size_bytes);
+
+        if file_len < 12 + payload_size {
+            anyhow::bail!("SFX payload size exceeds executable file size");
+        }
+
+        println!("SFX 자가 추출 실행 파일이 감지되었습니다.");
+
+        let payload_offset = file_len - 12 - payload_size;
+        file.seek(SeekFrom::Start(payload_offset))?;
+        let mut compressed_bytes = vec![0u8; payload_size as usize];
+        file.read_exact(&mut compressed_bytes)?;
+
+        let mut final_password = None;
+        if let Ok(header) = mzc::format::MzcHeader::from_bytes(&compressed_bytes) {
+            if header.version == mzc::format::VERSION_MZC8 {
+                println!("이 SFX 압축 파일은 암호화(AES-256)되어 있습니다.");
+                let prompt_pass = rpassword::prompt_password("비밀번호를 입력해 주세요: ")?;
+                final_password = Some(prompt_pass);
+            }
+        }
+
+        println!("자가 추출 중...");
+        let decompressed_bytes = mzc::decompress_bytes_v2_dict_password(
+            &compressed_bytes,
+            None,
+            final_password.as_deref()
+        ).context("SFX payload decompress failed")?;
+
+        let mut out_dir = exe_path.clone();
+        out_dir.set_extension("");
+        let mut folder_name = out_dir.file_name().unwrap_or_default().to_os_string();
+        folder_name.push("_extracted");
+        out_dir.set_file_name(folder_name);
+
+        println!("추출 타겟 디렉토리: {:?}", out_dir);
+
+        if mzc::archive::is_mzar_archive(&decompressed_bytes) {
+            mzc::archive::extract_archive(&decompressed_bytes, &out_dir)?;
+            println!("디렉토리 구조 추출 성공: {:?}", out_dir);
+        } else {
+            let mut out_file = exe_path.clone();
+            out_file.set_extension("extracted");
+            std::fs::write(&out_file, &decompressed_bytes)?;
+            println!("단일 파일 추출 성공: {:?}", out_file);
+        }
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+

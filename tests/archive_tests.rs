@@ -482,3 +482,92 @@ fn test_parse_mzar_metadata() {
     cleanup_temp_dir(&src_dir);
 }
 
+#[test]
+fn test_mzar_deduplication_and_parallel_extraction() {
+    let src_dir = create_unique_temp_dir("dedup_parallel_src");
+    let dest_dir = create_unique_temp_dir("dedup_parallel_dest");
+
+    // Create duplicate file content
+    let dup_content = b"This content is duplicated and should be deduplicated inside the MZAR archive.";
+    fs::write(src_dir.join("file1.txt"), dup_content).unwrap();
+    fs::write(src_dir.join("file2.txt"), dup_content).unwrap();
+    
+    // Create some subdirs
+    fs::create_dir_all(src_dir.join("sub")).unwrap();
+    fs::write(src_dir.join("sub").join("file3.txt"), dup_content).unwrap();
+    
+    // Create an unique file content
+    fs::write(src_dir.join("unique.txt"), b"This content is unique!").unwrap();
+
+    // Archive directory
+    let archive_bytes = archive_directory(&src_dir).expect("아카이브 생성 실패");
+
+    // Check metadata to verify entry types
+    let meta = mzc::archive::parse_mzar_metadata(&archive_bytes).expect("메타데이터 파싱 실패");
+    
+    // There should be 5 entries: file1.txt, file2.txt, sub, sub/file3.txt, unique.txt
+    assert_eq!(meta.len(), 5);
+    
+    // Verify duplicate entry type (entry_type == 2)
+    // Find file2.txt and sub/file3.txt which should be duplicates of file1.txt (first occurrence)
+    let mut file1 = None;
+    let mut file2 = None;
+    let mut file3 = None;
+    let mut unique = None;
+    let mut sub_dir = None;
+
+    for m in &meta {
+        if m.relative_path == "file1.txt" {
+            file1 = Some(m.clone());
+        } else if m.relative_path == "file2.txt" {
+            file2 = Some(m.clone());
+        } else if m.relative_path == "sub/file3.txt" {
+            file3 = Some(m.clone());
+        } else if m.relative_path == "unique.txt" {
+            unique = Some(m.clone());
+        } else if m.relative_path == "sub" {
+            sub_dir = Some(m.clone());
+        }
+    }
+
+    let file1 = file1.unwrap();
+    let file2 = file2.unwrap();
+    let file3 = file3.unwrap();
+    let unique = unique.unwrap();
+    let sub_dir = sub_dir.unwrap();
+
+    // file1.txt should be standard file
+    assert_eq!(file1.entry_type, 0);
+    assert_eq!(file1.size, dup_content.len() as u64);
+
+    // sub should be directory
+    assert_eq!(sub_dir.entry_type, 1);
+
+    // unique.txt should be standard file
+    assert_eq!(unique.entry_type, 0);
+
+    // file2.txt and sub/file3.txt should be duplicates (entry_type == 2)
+    assert_eq!(file2.entry_type, 2);
+    // Their size field stores the length of the reference path ("file1.txt" which is 9)
+    assert_eq!(file2.size, 9);
+    
+    assert_eq!(file3.entry_type, 2);
+    assert_eq!(file3.size, 9);
+
+    // Now extract and verify roundtrip completeness!
+    extract_archive(&archive_bytes, &dest_dir).expect("아카이브 추출 실패");
+
+    assert_dirs_equal(&src_dir, &dest_dir);
+
+    // Verify extract_single_file_from_mzar on both standard and duplicates
+    let ext_unique = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "unique.txt").unwrap();
+    assert_eq!(ext_unique, b"This content is unique!");
+
+    let ext_dup = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "sub/file3.txt").unwrap();
+    assert_eq!(ext_dup, dup_content);
+
+    cleanup_temp_dir(&src_dir);
+    cleanup_temp_dir(&dest_dir);
+}
+
+

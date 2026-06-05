@@ -220,6 +220,17 @@ pub enum Commands {
         input_file: PathBuf,
     },
 
+    /// MZC 압축 파일과 현재 실행 파일을 합쳐 단일 자가 추출 실행 파일(SFX)을 생성합니다.
+    Sfx {
+        /// 압축된 MZC 파일 경로 (*.mzc)
+        #[arg(value_name = "MZC_FILE")]
+        mzc_file: PathBuf,
+
+        /// 출력할 SFX 실행 파일 경로 (*.exe)
+        #[arg(value_name = "OUT_EXE")]
+        out_exe: PathBuf,
+    },
+
     /// MZC 그래픽 데스크톱 앱(GUI)을 실행합니다.
     Gui,
 
