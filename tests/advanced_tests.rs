@@ -173,7 +173,7 @@ fn test_bwt_mtf_roundtrip() {
 #[test]
 fn test_bwt_compress_roundtrip() {
     let original_bytes = b"Burrows-Wheeler Transform (BWT) rearranges a character string into runs of similar characters. This is extremely useful for compression.".repeat(10);
-    
+
     // Compress with BWT enabled
     let compressed = mzc::compress_bytes_v2_with_progress_dict(
         &original_bytes,
@@ -186,6 +186,8 @@ fn test_bwt_compress_roundtrip() {
         false,
         true, // bwt enabled
         None,
+        None, // chunk_size
+        0,    // checksum_type
         |_, _, _, _| {},
     );
     assert!(!compressed.is_empty());
@@ -195,4 +197,3 @@ fn test_bwt_compress_roundtrip() {
     assert_eq!(original_bytes.len(), decompressed.len());
     assert_eq!(original_bytes, decompressed);
 }
-

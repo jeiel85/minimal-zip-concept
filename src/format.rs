@@ -16,9 +16,11 @@ pub struct MzcHeader {
     pub magic: [u8; 4],
     pub version: u8,
     pub algorithm_type: u8,
+    pub checksum_type: u8, // 0 = SHA-256, 1 = CRC-32 (MZC9+)
     pub original_size: u64,
     pub payload_size: u64,
     pub dictionary_size: u16,
+    pub chunk_size: u32, // MZC9+
     pub original_sha256: [u8; 32],
 }
 
@@ -30,6 +32,7 @@ pub const MAGIC_MZC5: &[u8; 4] = b"MZC5";
 pub const MAGIC_MZC6: &[u8; 4] = b"MZC6";
 pub const MAGIC_MZC7: &[u8; 4] = b"MZC7";
 pub const MAGIC_MZC8: &[u8; 4] = b"MZC8";
+pub const MAGIC_MZC9: &[u8; 4] = b"MZC9";
 
 pub const VERSION_MZC1: u8 = 0x01;
 pub const VERSION_MZC2: u8 = 0x02;
@@ -39,6 +42,7 @@ pub const VERSION_MZC5: u8 = 0x05;
 pub const VERSION_MZC6: u8 = 0x06;
 pub const VERSION_MZC7: u8 = 0x07;
 pub const VERSION_MZC8: u8 = 0x08;
+pub const VERSION_MZC9: u8 = 0x09;
 
 pub const ALGORITHM_RLE: u8 = 0x01;
 pub const ALGORITHM_DICT: u8 = 0x02;
@@ -58,8 +62,32 @@ pub const HEADER_SIZE_MZC5: usize = 56;
 pub const HEADER_SIZE_MZC6: usize = 56;
 pub const HEADER_SIZE_MZC7: usize = 56;
 pub const HEADER_SIZE_MZC8: usize = 56;
+pub const HEADER_SIZE_MZC9: usize = 64;
 
 impl MzcHeader {
+    /// MZC9(버전 9) 기반의 새 헤더 구조체를 생성합니다.
+    pub fn new_v9(
+        algorithm_type: u8,
+        checksum_type: u8,
+        original_size: u64,
+        payload_size: u64,
+        dictionary_size: u16,
+        chunk_size: u32,
+        sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            magic: *MAGIC_MZC9,
+            version: VERSION_MZC9,
+            algorithm_type,
+            checksum_type,
+            original_size,
+            payload_size,
+            dictionary_size,
+            chunk_size,
+            original_sha256: sha256,
+        }
+    }
+
     /// MZC8(버전 8) 기반의 새 헤더 구조체를 생성합니다.
     pub fn new_v8(
         algorithm_type: u8,
@@ -72,9 +100,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC8,
             version: VERSION_MZC8,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -91,9 +121,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC7,
             version: VERSION_MZC7,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -110,9 +142,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC6,
             version: VERSION_MZC6,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -129,9 +163,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC5,
             version: VERSION_MZC5,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -148,9 +184,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC4,
             version: VERSION_MZC4,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -167,9 +205,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC3,
             version: VERSION_MZC3,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -186,9 +226,11 @@ impl MzcHeader {
             magic: *MAGIC_MZC2,
             version: VERSION_MZC2,
             algorithm_type,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
@@ -199,16 +241,20 @@ impl MzcHeader {
             magic: *MAGIC_MZC1,
             version: VERSION_MZC1,
             algorithm_type: ALGORITHM_RLE,
+            checksum_type: 0,
             original_size,
             payload_size,
             dictionary_size: 0,
+            chunk_size: 1_024_000,
             original_sha256: sha256,
         }
     }
 
     /// 현재 헤더 정보의 버전에 부합하는 고정 바이트 배열(`Vec<u8>`)로 직렬화합니다.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let size = if self.version >= VERSION_MZC2 {
+        let size = if self.version == VERSION_MZC9 {
+            HEADER_SIZE_MZC9
+        } else if self.version >= VERSION_MZC2 {
             HEADER_SIZE_MZC2
         } else {
             HEADER_SIZE_MZC1
@@ -224,19 +270,39 @@ impl MzcHeader {
         // 3. Algorithm Type (1 byte)
         bytes.push(self.algorithm_type);
 
-        // 4. Original Size (8 bytes, little-endian)
-        bytes.extend_from_slice(&self.original_size.to_le_bytes());
+        if self.version == VERSION_MZC9 {
+            // 4. Checksum Type (1 byte)
+            bytes.push(self.checksum_type);
 
-        // 5. Payload Size (8 bytes, little-endian)
-        bytes.extend_from_slice(&self.payload_size.to_le_bytes());
+            // 5. Reserved Padding (3 bytes)
+            bytes.extend_from_slice(&[0, 0, 0]);
 
-        // MZC2 이상 전용 필드 직렬화
-        if self.version >= VERSION_MZC2 {
-            // 6. Dictionary Size (2 bytes, little-endian)
+            // 6. Original Size (8 bytes)
+            bytes.extend_from_slice(&self.original_size.to_le_bytes());
+
+            // 7. Payload Size (8 bytes)
+            bytes.extend_from_slice(&self.payload_size.to_le_bytes());
+
+            // 8. Dictionary Size (2 bytes)
             bytes.extend_from_slice(&self.dictionary_size.to_le_bytes());
+
+            // 9. Chunk Size (4 bytes)
+            bytes.extend_from_slice(&self.chunk_size.to_le_bytes());
+        } else {
+            // 4. Original Size (8 bytes, little-endian)
+            bytes.extend_from_slice(&self.original_size.to_le_bytes());
+
+            // 5. Payload Size (8 bytes, little-endian)
+            bytes.extend_from_slice(&self.payload_size.to_le_bytes());
+
+            // MZC2 이상 전용 필드 직렬화
+            if self.version >= VERSION_MZC2 {
+                // 6. Dictionary Size (2 bytes, little-endian)
+                bytes.extend_from_slice(&self.dictionary_size.to_le_bytes());
+            }
         }
 
-        // 7. Original SHA-256 (32 bytes)
+        // 7/10. Checksum Data (32 bytes)
         bytes.extend_from_slice(&self.original_sha256);
 
         bytes
@@ -296,9 +362,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size: 0,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC2 {
@@ -352,9 +420,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC3 {
@@ -407,9 +477,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC4 {
@@ -462,9 +534,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC5 {
@@ -518,9 +592,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC6 {
@@ -574,9 +650,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC7 {
@@ -620,9 +698,11 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
                 original_sha256,
             })
         } else if magic == *MAGIC_MZC8 {
@@ -665,15 +745,70 @@ impl MzcHeader {
                 magic,
                 version,
                 algorithm_type,
+                checksum_type: 0,
                 original_size,
                 payload_size,
                 dictionary_size,
+                chunk_size: 1_024_000,
+                original_sha256,
+            })
+        } else if magic == *MAGIC_MZC9 {
+            // ================== MZC9 (64바이트) 파싱 ==================
+            if bytes.len() < HEADER_SIZE_MZC9 {
+                return Err(MzcError::TruncatedHeader {
+                    read_bytes: bytes.len(),
+                });
+            }
+
+            let version = bytes[4];
+            if version != VERSION_MZC9 {
+                return Err(MzcError::InvalidVersion {
+                    expected: VERSION_MZC9,
+                    found: version,
+                });
+            }
+
+            let algorithm_type = bytes[5];
+            let checksum_type = bytes[6];
+
+            let original_size_bytes: [u8; 8] = bytes[10..18]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let original_size = u64::from_le_bytes(original_size_bytes);
+
+            let payload_size_bytes: [u8; 8] = bytes[18..26]
+                .try_into()
+                .expect("u64 파싱용 8바이트 슬라이스 획득");
+            let payload_size = u64::from_le_bytes(payload_size_bytes);
+
+            let dictionary_size_bytes: [u8; 2] = bytes[26..28]
+                .try_into()
+                .expect("u16 사전크기 파싱용 2바이트 슬라이스 획득");
+            let dictionary_size = u16::from_le_bytes(dictionary_size_bytes);
+
+            let chunk_size_bytes: [u8; 4] = bytes[28..32]
+                .try_into()
+                .expect("u32 청크크기 파싱용 4바이트 슬라이스 획득");
+            let chunk_size = u32::from_le_bytes(chunk_size_bytes);
+
+            let mut original_sha256 = [0u8; 32];
+            original_sha256.copy_from_slice(&bytes[32..64]);
+
+            Ok(Self {
+                magic,
+                version,
+                algorithm_type,
+                checksum_type,
+                original_size,
+                payload_size,
+                dictionary_size,
+                chunk_size,
                 original_sha256,
             })
         } else {
             // 매직넘버 모두 틀린 규정 외 오염 파일
             let found = String::from_utf8_lossy(&magic).into_owned();
-            let expected = "MZC1 to MZC8".to_string();
+            let expected = "MZC1 to MZC9".to_string();
             Err(MzcError::InvalidMagic { expected, found })
         }
     }

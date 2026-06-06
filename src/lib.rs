@@ -42,22 +42,25 @@ pub mod archive;
 // ─── 공개 모듈: 암호화 및 해독 ───
 pub mod crypto;
 
+// ─── 공개 모듈: 아카이브 손상 복구 도구 ───
+pub mod recover;
+
 // ─── WebAssembly 바인딩 모듈 ───
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
 // [Rust 경로 수입 설명]
 // - use: 다른 모듈에 선언되어 있는 구조체, 에러, 함수 등을 현재 파일의 범위(Scope) 안으로 가져와 축약어로 쓸 수 있게 만듭니다.
+pub use archive::CompressionParams;
 use checksum::{bytes_to_hex, calculate_sha256};
 pub use cli::{CompressionMode, EntropyMode};
-pub use archive::CompressionParams;
 use error::MzcError;
 use format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
     FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
-    HEADER_SIZE_MZC8, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5,
-    VERSION_MZC6, VERSION_MZC7, VERSION_MZC8, MAGIC_MZC1, MAGIC_MZC2, MAGIC_MZC3, MAGIC_MZC4,
-    MAGIC_MZC5, MAGIC_MZC6, MAGIC_MZC7, MAGIC_MZC8,
+    HEADER_SIZE_MZC8, HEADER_SIZE_MZC9, MAGIC_MZC1, MAGIC_MZC2, MAGIC_MZC3, MAGIC_MZC4, MAGIC_MZC5,
+    MAGIC_MZC6, MAGIC_MZC7, MAGIC_MZC9, VERSION_MZC1, VERSION_MZC2, VERSION_MZC4, VERSION_MZC5,
+    VERSION_MZC6, VERSION_MZC7, VERSION_MZC8, VERSION_MZC9,
 };
 use huffman::{
     huffman_compress, huffman_compress_dynamic, huffman_decompress, huffman_decompress_dynamic,
@@ -129,7 +132,9 @@ pub fn compress_bytes_v2(
     png: bool,
     lpc: bool,
 ) -> Vec<u8> {
-    compress_bytes_v2_dict_password(original, mode, entropy, level, delta, bcj, png, lpc, None, None)
+    compress_bytes_v2_dict_password(
+        original, mode, entropy, level, delta, bcj, png, lpc, None, None,
+    )
 }
 
 /// **전역 공유 사전 데이터(dict_data)를 지원하는 버전 6 및 7 압축 엔트리포인트입니다.**
@@ -144,7 +149,9 @@ pub fn compress_bytes_v2_dict(
     lpc: bool,
     dict_data: Option<&[u8]>,
 ) -> Vec<u8> {
-    compress_bytes_v2_dict_password(original, mode, entropy, level, delta, bcj, png, lpc, dict_data, None)
+    compress_bytes_v2_dict_password(
+        original, mode, entropy, level, delta, bcj, png, lpc, dict_data, None,
+    )
 }
 
 /// **비밀번호 기반 암호화를 지원하는 사전 기반 압축 엔트리포인트입니다.**
@@ -172,6 +179,8 @@ pub fn compress_bytes_v2_dict_password(
         false, // bwt
         dict_data,
         password,
+        None,
+        0,
         |_, _, _, _| {},
     )
 }
@@ -203,6 +212,8 @@ where
         false, // bwt
         None,
         None,
+        None,
+        0,
         on_chunk_progress,
     )
 }
@@ -220,6 +231,8 @@ pub fn compress_bytes_v2_with_progress_dict_password<F>(
     bwt: bool,
     dict_data: Option<&[u8]>,
     password: Option<&str>,
+    chunk_size: Option<u32>,
+    checksum_type: u8,
     on_chunk_progress: F,
 ) -> Vec<u8>
 where
@@ -236,6 +249,8 @@ where
         lpc,
         bwt,
         dict_data,
+        chunk_size,
+        checksum_type,
         on_chunk_progress,
     );
 
@@ -250,7 +265,9 @@ where
             Ok(h) => h,
             Err(_) => return unencrypted_bytes,
         };
-        let header_size = if header.version >= VERSION_MZC2 {
+        let header_size = if header.version == VERSION_MZC9 {
+            HEADER_SIZE_MZC9
+        } else if header.version >= VERSION_MZC2 {
             HEADER_SIZE_MZC2
         } else {
             HEADER_SIZE_MZC1
@@ -270,17 +287,27 @@ where
             Err(_) => return Vec::new(),
         };
 
-        let mzc8_header = MzcHeader {
-            magic: *MAGIC_MZC8,
-            version: VERSION_MZC8,
-            algorithm_type: header.algorithm_type,
-            original_size: header.original_size,
-            payload_size: encrypted_payload.len() as u64,
-            dictionary_size: header.dictionary_size,
-            original_sha256: header.original_sha256,
+        let encrypted_header = if header.version == VERSION_MZC9 {
+            MzcHeader::new_v9(
+                header.algorithm_type,
+                header.checksum_type,
+                header.original_size,
+                encrypted_payload.len() as u64,
+                header.dictionary_size,
+                header.chunk_size,
+                header.original_sha256,
+            )
+        } else {
+            MzcHeader::new_v8(
+                header.algorithm_type,
+                header.original_size,
+                encrypted_payload.len() as u64,
+                header.dictionary_size,
+                header.original_sha256,
+            )
         };
 
-        let mut final_output = mzc8_header.to_bytes();
+        let mut final_output = encrypted_header.to_bytes();
         final_output.extend_from_slice(&encrypted_payload);
         final_output
     } else {
@@ -307,6 +334,8 @@ pub fn compress_bytes_v2_with_progress_dict<F>(
     lpc: bool,
     bwt: bool,
     dict_data: Option<&[u8]>,
+    chunk_size: Option<u32>,
+    checksum_type: u8,
     on_chunk_progress: F,
 ) -> Vec<u8>
 where
@@ -344,20 +373,24 @@ where
         .unwrap_or_default();
     let dictionary_size = global_dict_bytes.len() as u16;
 
-    // 1. 원본 데이터를 1MB 청크 단위 슬라이스들로 분할
+    // 1. 원본 데이터를 청크 단위 슬라이스들로 분할
+    let chunk_limit = chunk_size.unwrap_or(1_024_000) as usize;
     let mut chunks = Vec::new();
     let mut pos = 0;
     let n = original.len();
     while pos < n {
-        let end = std::cmp::min(pos + CHUNK_LIMIT, n);
+        let end = std::cmp::min(pos + chunk_limit, n);
         // [Rust 배열 슬라이싱]
         // - `&original[pos..end]`: 메모리 복사 없이, 원본 배열의 특정 구간만을 가리키는 포인터를 따서 벡터에 넣습니다.
         chunks.push(&original[pos..end]);
         pos = end;
     }
 
+    let is_v9 = chunk_size.is_some() || checksum_type == 1;
+
     // MZC7 조건 판단: Context Mixing 엔트로피나 미디어 전용 필터(PNG, LPC, BWT)가 켜진 경우 MZC7 규격 적용
     let is_v7 = entropy == EntropyMode::Cm || png || lpc || bwt;
+    let uses_extended_flags = is_v9 || is_v7;
 
     // 2. Rayon 멀티스레드 병렬 압축 맵 수행 (`par_iter()` 활용)
     // - par_iter(): 일반 iter() 대신 사용 시, Rayon이 내부적으로 작업 훔치기(Work-Stealing) 풀을 사용하여
@@ -380,7 +413,7 @@ where
 
             // A. 전처리 필터 적용
             let mut processed_chunk = chunk.to_vec();
-            if is_v7 {
+            if uses_extended_flags {
                 // MZC7의 경우 미디어 전용 필터를 최우선 적용합니다.
                 if png {
                     filters::apply_png_filter(&mut processed_chunk);
@@ -505,8 +538,8 @@ where
     let total_sha256 = calculate_sha256(original);
 
     // 3. 파일 헤더의 알고리즘 타입 플래그 비트 빌드 (비트 조작 마스크)
-    let algorithm_type_flag = if is_v7 {
-        // MZC7 비트 패킹 구조 매핑:
+    let algorithm_type_flag = if uses_extended_flags {
+        // MZC7+ 비트 패킹 구조 매핑:
         // - bits 0-1: 코어 알고리즘 (0 = Rle, 1 = Dict, 2 = Hybrid, 3 = Lz77)
         let core_bits = match mode {
             CompressionMode::Rle => 0,
@@ -565,14 +598,33 @@ where
 
     let is_v6 = dictionary_size > 0 || entropy == EntropyMode::Ans;
 
+    let computed_checksum = if checksum_type == 1 {
+        let crc = checksum::calculate_crc32(original);
+        let mut crc_bytes = [0u8; 32];
+        crc_bytes[0..4].copy_from_slice(&crc.to_le_bytes());
+        crc_bytes
+    } else {
+        total_sha256
+    };
+
     // 헤더 구조체 조립
-    let header = if is_v7 {
+    let header = if is_v9 {
+        MzcHeader::new_v9(
+            algorithm_type_flag,
+            checksum_type,
+            original.len() as u64,
+            (payload_buffer.len() + global_dict_bytes.len()) as u64,
+            dictionary_size,
+            chunk_limit as u32,
+            computed_checksum,
+        )
+    } else if is_v7 {
         MzcHeader::new_v7(
             algorithm_type_flag,
             original.len() as u64,
             (payload_buffer.len() + global_dict_bytes.len()) as u64,
             dictionary_size,
-            total_sha256,
+            computed_checksum,
         )
     } else if is_v6 {
         MzcHeader::new_v6(
@@ -580,7 +632,7 @@ where
             original.len() as u64,
             (payload_buffer.len() + global_dict_bytes.len()) as u64,
             dictionary_size,
-            total_sha256,
+            computed_checksum,
         )
     } else {
         MzcHeader::new_v5(
@@ -588,13 +640,13 @@ where
             original.len() as u64,
             payload_buffer.len() as u64,
             0,
-            total_sha256,
+            computed_checksum,
         )
     };
 
     // 출력 바이너리 조합
     let mut final_output = header.to_bytes();
-    if (is_v7 || is_v6) && dictionary_size > 0 {
+    if (is_v9 || is_v7 || is_v6) && dictionary_size > 0 {
         final_output.extend_from_slice(&global_dict_bytes);
     }
     final_output.extend_from_slice(&payload_buffer);
@@ -686,7 +738,7 @@ where
                 found: payload_area.len(),
             });
         }
-        
+
         // Decrypt the payload area
         let decrypted_payload = crypto::decrypt_payload(payload_area, pwd)?;
         if decrypted_payload.is_empty() {
@@ -703,6 +755,7 @@ where
             5 => *MAGIC_MZC5,
             6 => *MAGIC_MZC6,
             7 => *MAGIC_MZC7,
+            9 => *MAGIC_MZC9,
             _ => *MAGIC_MZC7,
         };
 
@@ -773,7 +826,12 @@ where
         return Ok(Vec::new());
     }
 
-    let payload_area = &mzc_bytes[HEADER_SIZE_MZC2..];
+    let header_size = if header.version == VERSION_MZC9 {
+        HEADER_SIZE_MZC9
+    } else {
+        HEADER_SIZE_MZC2
+    };
+    let payload_area = &mzc_bytes[header_size..];
     if payload_area.len() != header.payload_size as usize {
         return Err(MzcError::TruncatedBlock {
             expected: header.payload_size as usize,
@@ -818,15 +876,20 @@ where
         let chunk_comp_size = u32::from_le_bytes(comp_size_bytes) as usize;
 
         // Safety limit checks to prevent OOM on malformed inputs
-        if chunk_orig_size > CHUNK_LIMIT {
+        let limit = if header.version == VERSION_MZC9 {
+            header.chunk_size as usize
+        } else {
+            CHUNK_LIMIT
+        };
+        if chunk_orig_size > limit {
             return Err(MzcError::OriginalSizeMismatch {
-                expected: CHUNK_LIMIT as u64,
+                expected: limit as u64,
                 found: chunk_orig_size as u64,
             });
         }
-        if chunk_comb_size > CHUNK_LIMIT * 4 {
+        if chunk_comb_size > limit * 4 {
             return Err(MzcError::TruncatedBlock {
-                expected: CHUNK_LIMIT * 4,
+                expected: (limit * 4) as usize,
                 found: chunk_comb_size,
             });
         }
@@ -876,7 +939,9 @@ where
         .zip(chunk_offsets.par_iter())
         .try_for_each(|(&(chunk_data, chunk_orig_size, chunk_comb_size), &offset)| {
             // 엔트로피 타입 복원 감지 분기
-            let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
+            let uses_extended_flags =
+                header.version == VERSION_MZC7 || header.version == VERSION_MZC9;
+            let (is_huffman, is_dynamic, is_ans, is_cm) = if uses_extended_flags {
                 let entropy_bits = (header.algorithm_type >> 2) & 0x07;
                 (
                     entropy_bits == 1,
@@ -939,7 +1004,7 @@ where
             };
 
             // 디코딩용 코어 알고리즘 형태 추출
-            let core_alg = if header.version == VERSION_MZC7 {
+            let core_alg = if uses_extended_flags {
                 let core_bits = header.algorithm_type & 0x03;
                 match core_bits {
                     0 => ALGORITHM_RLE,
@@ -968,7 +1033,7 @@ where
             };
 
             // RLE / LZ77 블록 압축 해제 복원
-            let filter_bits = if header.version == VERSION_MZC7 {
+            let filter_bits = if uses_extended_flags {
                 (header.algorithm_type >> 5) & 0x07
             } else {
                 0
@@ -1001,7 +1066,7 @@ where
                 }
 
                 // 역필터를 dest_slice 상에서 인플레이스로 수행
-                if header.version == VERSION_MZC7 {
+                if uses_extended_flags {
                     match filter_bits {
                         1 => {
                             rle::inverse_delta_filter(dest_slice);
@@ -1048,12 +1113,25 @@ where
         });
     }
 
-    let computed_sha256 = calculate_sha256(&restored_bytes);
-    if computed_sha256 != header.original_sha256 {
-        return Err(MzcError::ChecksumMismatch {
-            expected: bytes_to_hex(&header.original_sha256),
-            found: bytes_to_hex(&computed_sha256),
-        });
+    if header.checksum_type == 1 {
+        let computed_crc = checksum::calculate_crc32(&restored_bytes);
+        let mut expected_crc_bytes = [0u8; 4];
+        expected_crc_bytes.copy_from_slice(&header.original_sha256[0..4]);
+        let expected_crc = u32::from_le_bytes(expected_crc_bytes);
+        if computed_crc != expected_crc {
+            return Err(MzcError::ChecksumMismatch {
+                expected: format!("CRC-32: {:08x}", expected_crc),
+                found: format!("CRC-32: {:08x}", computed_crc),
+            });
+        }
+    } else {
+        let computed_sha256 = calculate_sha256(&restored_bytes);
+        if computed_sha256 != header.original_sha256 {
+            return Err(MzcError::ChecksumMismatch {
+                expected: bytes_to_hex(&header.original_sha256),
+                found: bytes_to_hex(&computed_sha256),
+            });
+        }
     }
 
     Ok(restored_bytes)
@@ -1325,10 +1403,24 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
 ) -> Result<(), MzcError> {
     use sha2::Digest;
 
-    // 1. 헤더 영역 읽기
-    let mut header_bytes = [0u8; HEADER_SIZE_MZC2];
+    // 1. 헤더 영역 읽기 (먼저 4바이트 매직 확인 후 분기)
+    let mut magic_bytes = [0u8; 4];
     reader
-        .read_exact(&mut header_bytes)
+        .read_exact(&mut magic_bytes)
+        .map_err(|e| MzcError::IoError(e.to_string()))?;
+
+    let header_size = if &magic_bytes == MAGIC_MZC9 {
+        HEADER_SIZE_MZC9
+    } else if &magic_bytes == MAGIC_MZC1 {
+        HEADER_SIZE_MZC1
+    } else {
+        HEADER_SIZE_MZC2
+    };
+
+    let mut header_bytes = vec![0u8; header_size];
+    header_bytes[0..4].copy_from_slice(&magic_bytes);
+    reader
+        .read_exact(&mut header_bytes[4..])
         .map_err(|e| MzcError::IoError(e.to_string()))?;
     let header = MzcHeader::from_bytes(&header_bytes)?;
 
@@ -1349,6 +1441,7 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
     let mut total_bytes_read = header.dictionary_size as u64;
     let mut total_orig_size = 0u64;
     let mut hasher = sha2::Sha256::new();
+    let mut crc_hasher = crc32fast::Hasher::new();
 
     while total_bytes_read < header.payload_size {
         // 청크 헤더 (12바이트) 로드
@@ -1362,15 +1455,20 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         let chunk_comb_size = u32::from_le_bytes(chunk_header[4..8].try_into().unwrap()) as usize;
         let chunk_comp_size = u32::from_le_bytes(chunk_header[8..12].try_into().unwrap()) as usize;
 
-        if chunk_orig_size > CHUNK_LIMIT {
+        let limit = if header.version == VERSION_MZC9 {
+            header.chunk_size as usize
+        } else {
+            CHUNK_LIMIT
+        };
+        if chunk_orig_size > limit {
             return Err(MzcError::OriginalSizeMismatch {
-                expected: CHUNK_LIMIT as u64,
+                expected: limit as u64,
                 found: chunk_orig_size as u64,
             });
         }
-        if chunk_comb_size > CHUNK_LIMIT * 4 {
+        if chunk_comb_size > limit * 4 {
             return Err(MzcError::TruncatedBlock {
-                expected: CHUNK_LIMIT * 4,
+                expected: limit * 4,
                 found: chunk_comb_size,
             });
         }
@@ -1383,7 +1481,8 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         total_bytes_read += chunk_comp_size as u64;
 
         // 엔트로피 모드 역추론
-        let (is_huffman, is_dynamic, is_ans, is_cm) = if header.version == VERSION_MZC7 {
+        let uses_extended_flags = header.version == VERSION_MZC7 || header.version == VERSION_MZC9;
+        let (is_huffman, is_dynamic, is_ans, is_cm) = if uses_extended_flags {
             let entropy_bits = (header.algorithm_type >> 2) & 0x07;
             (
                 entropy_bits == 1,
@@ -1439,7 +1538,7 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         };
 
         // 알고리즘 플래그 파싱
-        let is_v7 = header.version == VERSION_MZC7;
+        let is_v7 = uses_extended_flags;
         let alg_type = if is_v7 {
             let core_bits = header.algorithm_type & 0x03;
             match core_bits {
@@ -1457,7 +1556,7 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
             alg
         };
 
-        let filter_bits = if header.version == VERSION_MZC7 {
+        let filter_bits = if uses_extended_flags {
             (header.algorithm_type >> 5) & 0x07
         } else {
             0
@@ -1533,7 +1632,11 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         writer
             .write_all(&decompressed_chunk)
             .map_err(|e| MzcError::IoError(e.to_string()))?;
-        hasher.update(&decompressed_chunk);
+        if header.checksum_type == 1 {
+            crc_hasher.update(&decompressed_chunk);
+        } else {
+            hasher.update(&decompressed_chunk);
+        }
         total_orig_size += chunk_orig_size as u64;
     }
 
@@ -1545,14 +1648,27 @@ pub fn decompress_stream<R: std::io::Read, W: std::io::Write>(
         });
     }
 
-    let computed_sha256 = hasher.finalize();
-    let mut computed_array = [0u8; 32];
-    computed_array.copy_from_slice(&computed_sha256);
-    if computed_array != header.original_sha256 {
-        return Err(MzcError::ChecksumMismatch {
-            expected: bytes_to_hex(&header.original_sha256),
-            found: bytes_to_hex(&computed_array),
-        });
+    if header.checksum_type == 1 {
+        let computed_crc = crc_hasher.finalize();
+        let mut expected_crc_bytes = [0u8; 4];
+        expected_crc_bytes.copy_from_slice(&header.original_sha256[0..4]);
+        let expected_crc = u32::from_le_bytes(expected_crc_bytes);
+        if computed_crc != expected_crc {
+            return Err(MzcError::ChecksumMismatch {
+                expected: format!("CRC-32: {:08x}", expected_crc),
+                found: format!("CRC-32: {:08x}", computed_crc),
+            });
+        }
+    } else {
+        let computed_sha256 = hasher.finalize();
+        let mut computed_array = [0u8; 32];
+        computed_array.copy_from_slice(&computed_sha256);
+        if computed_array != header.original_sha256 {
+            return Err(MzcError::ChecksumMismatch {
+                expected: bytes_to_hex(&header.original_sha256),
+                found: bytes_to_hex(&computed_array),
+            });
+        }
     }
 
     Ok(())

@@ -2,7 +2,7 @@ use crate::checksum::{bytes_to_hex, calculate_sha256};
 use crate::decompress_bytes_v2;
 use crate::format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, HEADER_SIZE_MZC1,
-    HEADER_SIZE_MZC2, VERSION_MZC1, VERSION_MZC2, VERSION_MZC3,
+    HEADER_SIZE_MZC2, HEADER_SIZE_MZC9, VERSION_MZC1, VERSION_MZC2, VERSION_MZC9,
 };
 use crate::huffman::huffman_decompress;
 use crate::rle::Dictionary;
@@ -26,7 +26,9 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
     let header = MzcHeader::from_bytes(&file_bytes)
         .context("MZC 헤더 분석에 실패했습니다. 포맷 오염이 의심됩니다.")?;
 
-    let header_size = if header.version == VERSION_MZC2 || header.version == VERSION_MZC3 {
+    let header_size = if header.version == VERSION_MZC9 {
+        HEADER_SIZE_MZC9
+    } else if header.version >= VERSION_MZC2 {
         HEADER_SIZE_MZC2
     } else {
         HEADER_SIZE_MZC1
@@ -64,10 +66,10 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
         100.0
     };
 
-    let format_str = if header.version == VERSION_MZC3 {
-        "MZC3 (Minimal Zip Concept v3 - Sliding Window Chunk Spec)"
-    } else if header.version == VERSION_MZC2 {
-        "MZC2 (Minimal Zip Concept v2 - Parallel Chunk Spec)"
+    let format_str = if header.version == VERSION_MZC9 {
+        "MZC9 (Minimal Zip Concept v9 - Configurable Chunks & Solid)"
+    } else if header.version >= VERSION_MZC2 {
+        "MZC2-MZC8 Chunk/Parallel Spec"
     } else {
         "MZC1 (Minimal Zip Concept v1 - Single RLE Spec)"
     };
@@ -103,7 +105,7 @@ pub fn inspect_mzc_file<P: AsRef<Path>>(file_path: P) -> Result<()> {
     let mut backref_blocks = 0;
     let mut visual_blocks = Vec::new();
 
-    if (header.version == VERSION_MZC2 || header.version == VERSION_MZC3) && original_size > 0 {
+    if header.version >= VERSION_MZC2 && original_size > 0 {
         // MZC2/MZC3의 청크 세그먼트들을 디코딩하여 스캔 진행
         let mut pos = 0;
         let n = payload_bytes.len();

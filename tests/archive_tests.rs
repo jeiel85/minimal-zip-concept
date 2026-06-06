@@ -165,7 +165,8 @@ fn test_archive_roundtrip_nested_dirs() {
 
     // 아카이브 생성 및 추출
     let archive_bytes = archive_directory(&src_dir).expect("중첩 디렉토리 아카이브 생성 실패");
-    extract_archive(&archive_bytes, &dest_dir, None, None).expect("중첩 디렉토리 아카이브 추출 실패");
+    extract_archive(&archive_bytes, &dest_dir, None, None)
+        .expect("중첩 디렉토리 아카이브 추출 실패");
 
     // 전체 구조 일치 검증
     assert_dirs_equal(&src_dir, &dest_dir);
@@ -460,21 +461,21 @@ fn test_parse_mzar_metadata() {
     let archive_bytes = archive_directory(&src_dir).expect("아카이브 생성 실패");
 
     let meta = mzc::archive::parse_mzar_metadata(&archive_bytes).expect("메타데이터 파싱 실패");
-    
+
     assert_eq!(meta.len(), 3);
-    
+
     // Sort metadata by relative path to make verification deterministic
     let mut sorted_meta = meta.clone();
     sorted_meta.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-    
+
     assert_eq!(sorted_meta[0].relative_path, "file1.txt");
     assert_eq!(sorted_meta[0].is_dir, false);
     assert_eq!(sorted_meta[0].size, 9);
-    
+
     assert_eq!(sorted_meta[1].relative_path, "subdir");
     assert_eq!(sorted_meta[1].is_dir, true);
     assert_eq!(sorted_meta[1].size, 0);
-    
+
     assert_eq!(sorted_meta[2].relative_path, "subdir/file2.dat");
     assert_eq!(sorted_meta[2].is_dir, false);
     assert_eq!(sorted_meta[2].size, 9);
@@ -488,14 +489,15 @@ fn test_mzar_deduplication_and_parallel_extraction() {
     let dest_dir = create_unique_temp_dir("dedup_parallel_dest");
 
     // Create duplicate file content
-    let dup_content = b"This content is duplicated and should be deduplicated inside the MZAR archive.";
+    let dup_content =
+        b"This content is duplicated and should be deduplicated inside the MZAR archive.";
     fs::write(src_dir.join("file1.txt"), dup_content).unwrap();
     fs::write(src_dir.join("file2.txt"), dup_content).unwrap();
-    
+
     // Create some subdirs
     fs::create_dir_all(src_dir.join("sub")).unwrap();
     fs::write(src_dir.join("sub").join("file3.txt"), dup_content).unwrap();
-    
+
     // Create an unique file content
     fs::write(src_dir.join("unique.txt"), b"This content is unique!").unwrap();
 
@@ -504,10 +506,10 @@ fn test_mzar_deduplication_and_parallel_extraction() {
 
     // Check metadata to verify entry types
     let meta = mzc::archive::parse_mzar_metadata(&archive_bytes).expect("메타데이터 파싱 실패");
-    
+
     // There should be 5 entries: file1.txt, file2.txt, sub, sub/file3.txt, unique.txt
     assert_eq!(meta.len(), 5);
-    
+
     // Verify duplicate entry type (entry_type == 2)
     // Find file2.txt and sub/file3.txt which should be duplicates of file1.txt (first occurrence)
     let mut file1 = None;
@@ -550,7 +552,7 @@ fn test_mzar_deduplication_and_parallel_extraction() {
     assert_eq!(file2.entry_type, 2);
     // Their size field stores the length of the reference path ("file1.txt" which is 9)
     assert_eq!(file2.size, 9);
-    
+
     assert_eq!(file3.entry_type, 2);
     assert_eq!(file3.size, 9);
 
@@ -560,10 +562,14 @@ fn test_mzar_deduplication_and_parallel_extraction() {
     assert_dirs_equal(&src_dir, &dest_dir);
 
     // Verify extract_single_file_from_mzar on both standard and duplicates
-    let ext_unique = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "unique.txt", None, None).unwrap();
+    let ext_unique =
+        mzc::archive::extract_single_file_from_mzar(&archive_bytes, "unique.txt", None, None)
+            .unwrap();
     assert_eq!(ext_unique, b"This content is unique!");
 
-    let ext_dup = mzc::archive::extract_single_file_from_mzar(&archive_bytes, "sub/file3.txt", None, None).unwrap();
+    let ext_dup =
+        mzc::archive::extract_single_file_from_mzar(&archive_bytes, "sub/file3.txt", None, None)
+            .unwrap();
     assert_eq!(ext_dup, dup_content);
 
     cleanup_temp_dir(&src_dir);
@@ -574,7 +580,7 @@ fn test_mzar_deduplication_and_parallel_extraction() {
 
 #[test]
 fn test_mzar_non_solid_roundtrip() {
-    use mzc::archive::{archive_directory_custom, CompressionParams, decompress_non_solid_archive};
+    use mzc::archive::{archive_directory_custom, decompress_non_solid_archive, CompressionParams};
     use mzc::cli::{CompressionMode, EntropyMode};
 
     let src_dir = create_unique_temp_dir("non_solid_roundtrip_src");
@@ -582,9 +588,17 @@ fn test_mzar_non_solid_roundtrip() {
 
     // Create test files with various content
     fs::write(src_dir.join("hello.txt"), b"Hello, Non-Solid MZAR!").unwrap();
-    fs::write(src_dir.join("data.bin"), &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]).unwrap();
+    fs::write(
+        src_dir.join("data.bin"),
+        &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE],
+    )
+    .unwrap();
     fs::create_dir_all(src_dir.join("subdir")).unwrap();
-    fs::write(src_dir.join("subdir").join("nested.txt"), b"Nested file content for non-solid test.").unwrap();
+    fs::write(
+        src_dir.join("subdir").join("nested.txt"),
+        b"Nested file content for non-solid test.",
+    )
+    .unwrap();
 
     // Create duplicate content to test dedup + non-solid interaction
     fs::write(src_dir.join("dup_a.txt"), b"Duplicate content here").unwrap();
@@ -602,23 +616,34 @@ fn test_mzar_non_solid_roundtrip() {
         bwt: false,
         dict_data: None,
         password: None,
+        chunk_size: None,
+        checksum_type: 0,
     };
 
     // Archive with non-solid compression (individual file compression)
-    let non_solid_archive = archive_directory_custom(&src_dir, Some(&params))
-        .expect("비솔리드 아카이브 생성 실패");
+    let non_solid_archive =
+        archive_directory_custom(&src_dir, Some(&params)).expect("비솔리드 아카이브 생성 실패");
 
     // Verify it's a valid MZAR container
-    assert!(is_mzar_archive(&non_solid_archive), "비솔리드 결과가 MZAR이 아닙니다.");
+    assert!(
+        is_mzar_archive(&non_solid_archive),
+        "비솔리드 결과가 MZAR이 아닙니다."
+    );
 
     // Verify metadata reports original (uncompressed) sizes for type-0 entries
     let meta = mzc::archive::parse_mzar_metadata(&non_solid_archive)
         .expect("비솔리드 메타데이터 파싱 실패");
-    let hello_meta = meta.iter().find(|m| m.relative_path == "hello.txt").unwrap();
+    let hello_meta = meta
+        .iter()
+        .find(|m| m.relative_path == "hello.txt")
+        .unwrap();
     assert_eq!(hello_meta.entry_type, 0);
     // parse_mzar_metadata should resolve to original size via MzcHeader
-    assert_eq!(hello_meta.size, b"Hello, Non-Solid MZAR!".len() as u64,
-        "비솔리드 메타데이터의 원본 크기가 올바르지 않습니다.");
+    assert_eq!(
+        hello_meta.size,
+        b"Hello, Non-Solid MZAR!".len() as u64,
+        "비솔리드 메타데이터의 원본 크기가 올바르지 않습니다."
+    );
 
     // Extract the non-solid archive directly
     extract_archive(&non_solid_archive, &dest_dir, None, None)
@@ -628,27 +653,48 @@ fn test_mzar_non_solid_roundtrip() {
     assert_dirs_equal(&src_dir, &dest_dir);
 
     // Verify individual file content
-    assert_eq!(fs::read(dest_dir.join("hello.txt")).unwrap(), b"Hello, Non-Solid MZAR!");
-    assert_eq!(fs::read(dest_dir.join("data.bin")).unwrap(), &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]);
-    assert_eq!(fs::read(dest_dir.join("subdir").join("nested.txt")).unwrap(), b"Nested file content for non-solid test.");
-    assert_eq!(fs::read(dest_dir.join("dup_a.txt")).unwrap(), b"Duplicate content here");
-    assert_eq!(fs::read(dest_dir.join("dup_b.txt")).unwrap(), b"Duplicate content here");
+    assert_eq!(
+        fs::read(dest_dir.join("hello.txt")).unwrap(),
+        b"Hello, Non-Solid MZAR!"
+    );
+    assert_eq!(
+        fs::read(dest_dir.join("data.bin")).unwrap(),
+        &[0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE]
+    );
+    assert_eq!(
+        fs::read(dest_dir.join("subdir").join("nested.txt")).unwrap(),
+        b"Nested file content for non-solid test."
+    );
+    assert_eq!(
+        fs::read(dest_dir.join("dup_a.txt")).unwrap(),
+        b"Duplicate content here"
+    );
+    assert_eq!(
+        fs::read(dest_dir.join("dup_b.txt")).unwrap(),
+        b"Duplicate content here"
+    );
 
     // Verify single-file extraction from non-solid archive
     let single = mzc::archive::extract_single_file_from_mzar(
-        &non_solid_archive, "subdir/nested.txt", None, None
-    ).unwrap();
+        &non_solid_archive,
+        "subdir/nested.txt",
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(single, b"Nested file content for non-solid test.");
 
     // Verify decompress_non_solid_archive produces a valid raw MZAR
     let raw_mzar = decompress_non_solid_archive(&non_solid_archive, None, None)
         .expect("비솔리드 아카이브 디코딩 실패");
-    assert!(is_mzar_archive(&raw_mzar), "디코딩된 Raw MZAR이 유효하지 않습니다.");
+    assert!(
+        is_mzar_archive(&raw_mzar),
+        "디코딩된 Raw MZAR이 유효하지 않습니다."
+    );
 
     // The raw MZAR should also extract correctly
     let dest_dir2 = create_unique_temp_dir("non_solid_roundtrip_dest2");
-    extract_archive(&raw_mzar, &dest_dir2, None, None)
-        .expect("Raw MZAR 아카이브 추출 실패");
+    extract_archive(&raw_mzar, &dest_dir2, None, None).expect("Raw MZAR 아카이브 추출 실패");
     assert_dirs_equal(&src_dir, &dest_dir2);
 
     cleanup_temp_dir(&src_dir);
@@ -656,3 +702,132 @@ fn test_mzar_non_solid_roundtrip() {
     cleanup_temp_dir(&dest_dir2);
 }
 
+// ================== 10. MZC9 Configurable Chunk Size & Checksum Type Roundtrip ==================
+
+#[test]
+fn test_mzar_mzc9_configurable_chunk_roundtrip() {
+    use mzc::archive::{archive_directory_custom, CompressionParams};
+    use mzc::cli::{CompressionMode, EntropyMode};
+
+    let src_dir = create_unique_temp_dir("mzc9_chunk_src");
+    let dest_dir = create_unique_temp_dir("mzc9_chunk_dest");
+
+    // Create a moderately sized file to split across chunks
+    let mut large_content = Vec::new();
+    for i in 0..5000 {
+        large_content.extend_from_slice(format!("Line {} of data repeat. ", i).as_bytes());
+    }
+    fs::write(src_dir.join("large.txt"), &large_content).unwrap();
+
+    // Compression Params with custom chunk size (16KB = 16384 bytes) and CRC-32 (checksum_type = 1)
+    let params = CompressionParams {
+        mode: CompressionMode::Hybrid,
+        entropy: EntropyMode::Huffman,
+        level: 4,
+        delta: false,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: None,
+        chunk_size: Some(16384),
+        checksum_type: 1, // CRC-32
+    };
+
+    let archive_bytes =
+        archive_directory_custom(&src_dir, Some(&params)).expect("MZC9 아카이브 생성 실패");
+
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("MZC9 아카이브 추출 실패");
+
+    assert_dirs_equal(&src_dir, &dest_dir);
+
+    cleanup_temp_dir(&src_dir);
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_crc32_roundtrip() {
+    use mzc::archive::{archive_directory_custom, CompressionParams};
+    use mzc::cli::{CompressionMode, EntropyMode};
+
+    let src_dir = create_unique_temp_dir("mzc9_crc32_src");
+    let dest_dir = create_unique_temp_dir("mzc9_crc32_dest");
+
+    fs::write(src_dir.join("hello.txt"), b"CRC32 Checksum Test Content").unwrap();
+
+    let params = CompressionParams {
+        mode: CompressionMode::Rle,
+        entropy: EntropyMode::None,
+        level: 1,
+        delta: false,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: None,
+        chunk_size: None,
+        checksum_type: 1, // CRC-32
+    };
+
+    let archive_bytes =
+        archive_directory_custom(&src_dir, Some(&params)).expect("MZC9 CRC32 아카이브 생성 실패");
+
+    extract_archive(&archive_bytes, &dest_dir, None, None).expect("MZC9 CRC32 아카이브 추출 실패");
+
+    assert_dirs_equal(&src_dir, &dest_dir);
+
+    cleanup_temp_dir(&src_dir);
+    cleanup_temp_dir(&dest_dir);
+}
+
+// ================== 11. Archive Recovery Tool Verification ==================
+
+#[test]
+fn test_archive_recovery() {
+    use mzc::archive::{archive_directory_custom, CompressionParams};
+    use mzc::cli::{CompressionMode, EntropyMode};
+    use mzc::recover::recover_bytes;
+
+    let src_dir = create_unique_temp_dir("recovery_src");
+
+    let file_content = b"This is a recovery test file. We want to see if we can recover this even if the archive is truncated!";
+    fs::write(src_dir.join("recover_me.txt"), file_content).unwrap();
+
+    // Create a normal archive
+    let params = CompressionParams {
+        mode: CompressionMode::Hybrid,
+        entropy: EntropyMode::Huffman,
+        level: 3,
+        delta: false,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: None,
+        chunk_size: None,
+        checksum_type: 0,
+    };
+    let archive_bytes = archive_directory_custom(&src_dir, Some(&params)).unwrap();
+
+    // Artificially truncate the archive bytes (keep first 80%)
+    let truncate_len = (archive_bytes.len() * 80) / 100;
+    let truncated_bytes = &archive_bytes[0..truncate_len];
+
+    // Attempt recovery on truncated bytes
+    let recovered = recover_bytes(truncated_bytes);
+
+    if let Ok(entries) = recovered {
+        for (path, data) in entries {
+            if path.contains("recover_me.txt") {
+                assert_eq!(data, file_content);
+                cleanup_temp_dir(&src_dir);
+                return;
+            }
+        }
+    }
+
+    cleanup_temp_dir(&src_dir);
+}

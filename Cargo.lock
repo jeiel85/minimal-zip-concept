@@ -1727,6 +1727,7 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "clap",
+ "crc32fast",
  "criterion",
  "eframe",
  "egui_plot",

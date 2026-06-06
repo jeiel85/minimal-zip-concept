@@ -22,6 +22,8 @@ pub struct CompressionParams<'a> {
     pub bwt: bool,
     pub dict_data: Option<&'a [u8]>,
     pub password: Option<&'a str>,
+    pub chunk_size: Option<u32>,
+    pub checksum_type: u8,
 }
 
 /// **MZAR 아카이브 컨테이너 엔트리 메타데이터**
@@ -150,11 +152,11 @@ pub fn archive_paths_custom(
             collect_paths(path, path, &mut sub_paths)?;
 
             for (sub_path, is_dir) in sub_paths {
-                let rel = sub_path.strip_prefix(path).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
-                })?;
-                let relative_path = format!("{}/{}", file_name, rel.to_string_lossy())
-                    .replace('\\', "/");
+                let rel = sub_path
+                    .strip_prefix(path)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+                let relative_path =
+                    format!("{}/{}", file_name, rel.to_string_lossy()).replace('\\', "/");
 
                 if is_dir {
                     entries.push(MzarEntry {
@@ -201,7 +203,8 @@ pub fn serialize_entries_custom(
     compress_params: Option<&CompressionParams>,
 ) -> io::Result<Vec<u8>> {
     // 중복 제거 매핑: 파일 본문 해시 대신 데이터를 그대로 Map의 키로 매핑
-    let mut seen_files: std::collections::HashMap<Vec<u8>, String> = std::collections::HashMap::new();
+    let mut seen_files: std::collections::HashMap<Vec<u8>, String> =
+        std::collections::HashMap::new();
     for entry in entries.iter_mut() {
         if entry.entry_type == 0 {
             if let Some(first_path) = seen_files.get(&entry.data) {
@@ -234,6 +237,8 @@ pub fn serialize_entries_custom(
                         params.bwt,
                         params.dict_data,
                         params.password,
+                        params.chunk_size,
+                        params.checksum_type,
                         |_, _, _, _| {},
                     );
                     entry.data = compressed;
@@ -256,6 +261,8 @@ pub fn serialize_entries_custom(
                         params.bwt,
                         params.dict_data,
                         params.password,
+                        params.chunk_size,
+                        params.checksum_type,
                         |_, _, _, _| {},
                     );
                     entry.data = compressed;
@@ -368,27 +375,31 @@ pub fn extract_archive(
 
         let target_path = dest_dir.join(path_str);
 
-        let canonical_target = if target_path.exists() {
-            target_path.canonicalize()?
-        } else {
-            let parent_canonical = target_path
-                .parent()
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "부모 디렉토리가 없습니다.")
-                })?
-                .canonicalize()
-                .or_else(|_| {
-                    if let Some(p) = target_path.parent() {
-                        fs::create_dir_all(p)?;
-                        p.canonicalize()
-                    } else {
-                        Err(io::Error::new(io::ErrorKind::InvalidData, "부모 디렉토리 생성 실패"))
-                    }
-                })?;
-            parent_canonical.join(target_path.file_name().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "파일명이 없습니다.")
-            })?)
-        };
+        let canonical_target =
+            if target_path.exists() {
+                target_path.canonicalize()?
+            } else {
+                let parent_canonical = target_path
+                    .parent()
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "부모 디렉토리가 없습니다.")
+                    })?
+                    .canonicalize()
+                    .or_else(|_| {
+                        if let Some(p) = target_path.parent() {
+                            fs::create_dir_all(p)?;
+                            p.canonicalize()
+                        } else {
+                            Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "부모 디렉토리 생성 실패",
+                            ))
+                        }
+                    })?;
+                parent_canonical.join(target_path.file_name().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "파일명이 없습니다.")
+                })?)
+            };
 
         if !canonical_target.starts_with(&canonical_dest) {
             return Err(io::Error::new(
@@ -410,8 +421,14 @@ pub fn extract_archive(
             cursor += file_size;
 
             if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
-                file_data = crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+                file_data =
+                    crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
+                        .map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("개별 파일 해제 실패: {:?}", e),
+                            )
+                        })?;
             }
 
             files_to_write.push((target_path, file_data));
@@ -439,9 +456,9 @@ pub fn extract_archive(
     // 1. 디렉토리 생성 병렬 처리
     #[cfg(not(target_arch = "wasm32"))]
     {
-        dirs_to_create.par_iter().try_for_each(|dir| {
-            fs::create_dir_all(dir)
-        })?;
+        dirs_to_create
+            .par_iter()
+            .try_for_each(|dir| fs::create_dir_all(dir))?;
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -651,7 +668,10 @@ pub fn extract_single_file_from_mzar(
 
     for _ in 0..entry_count {
         if cursor + 2 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "엔트리 헤더 읽기 실패: 경량 헤더"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "엔트리 헤더 읽기 실패: 경량 헤더",
+            ));
         }
         let mut path_len_bytes = [0u8; 2];
         path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 2]);
@@ -659,7 +679,10 @@ pub fn extract_single_file_from_mzar(
         cursor += 2;
 
         if cursor + path_len > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "상대 경로 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "상대 경로 읽기 실패",
+            ));
         }
         let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor + path_len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
@@ -667,7 +690,10 @@ pub fn extract_single_file_from_mzar(
         cursor += path_len;
 
         if cursor + 9 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "플래그 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "플래그 읽기 실패",
+            ));
         }
         let entry_type = archive_bytes[cursor];
         cursor += 1;
@@ -680,7 +706,10 @@ pub fn extract_single_file_from_mzar(
         let data_offset = cursor;
         if entry_type == 0 || entry_type == 2 {
             if cursor + file_size > data_len {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "파일 데이터가 잘렸습니다."));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "파일 데이터가 잘렸습니다.",
+                ));
             }
             cursor += file_size;
         }
@@ -694,12 +723,20 @@ pub fn extract_single_file_from_mzar(
     for _ in 0..10 {
         if let Some(&(entry_type, size, data_offset)) = entries_map.get(&current_target) {
             if entry_type == 1 {
-                return Err(io::Error::new(io::ErrorKind::InvalidInput, "대상 경로가 디렉토리입니다."));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "대상 경로가 디렉토리입니다.",
+                ));
             } else if entry_type == 0 {
                 let mut data = archive_bytes[data_offset..data_offset + size].to_vec();
                 if data.len() >= 4 && &data[0..3] == b"MZC" {
                     data = crate::decompress_bytes_v2_dict_password(&data, dict_data, password)
-                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+                        .map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("개별 파일 해제 실패: {:?}", e),
+                            )
+                        })?;
                 }
                 return Ok(data);
             } else if entry_type == 2 {
@@ -729,10 +766,16 @@ pub fn decompress_non_solid_archive(
     dict_data: Option<&[u8]>,
 ) -> io::Result<Vec<u8>> {
     if archive_bytes.len() < 8 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "MZAR 데이터가 너무 짧습니다."));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "MZAR 데이터가 너무 짧습니다.",
+        ));
     }
     if &archive_bytes[0..4] != MZAR_MAGIC {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "유효한 MZAR 아카이브가 아닙니다."));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "유효한 MZAR 아카이브가 아닙니다.",
+        ));
     }
 
     let mut entry_count_bytes = [0u8; 4];
@@ -745,7 +788,10 @@ pub fn decompress_non_solid_archive(
 
     for _ in 0..entry_count {
         if cursor + 2 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "엔트리 헤더 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "엔트리 헤더 읽기 실패",
+            ));
         }
         let mut path_len_bytes = [0u8; 2];
         path_len_bytes.copy_from_slice(&archive_bytes[cursor..cursor + 2]);
@@ -753,7 +799,10 @@ pub fn decompress_non_solid_archive(
         cursor += 2;
 
         if cursor + path_len > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "상대 경로 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "상대 경로 읽기 실패",
+            ));
         }
         let path_str = std::str::from_utf8(&archive_bytes[cursor..cursor + path_len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
@@ -761,7 +810,10 @@ pub fn decompress_non_solid_archive(
         cursor += path_len;
 
         if cursor + 9 > data_len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "플래그 읽기 실패"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "플래그 읽기 실패",
+            ));
         }
         let entry_type = archive_bytes[cursor];
         cursor += 1;
@@ -780,14 +832,23 @@ pub fn decompress_non_solid_archive(
             });
         } else if entry_type == 0 {
             if cursor + file_size > data_len {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "파일 데이터가 잘렸습니다."));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "파일 데이터가 잘렸습니다.",
+                ));
             }
             let mut file_data = archive_bytes[cursor..cursor + file_size].to_vec();
             cursor += file_size;
 
             if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
-                file_data = crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("개별 파일 해제 실패: {:?}", e)))?;
+                file_data =
+                    crate::decompress_bytes_v2_dict_password(&file_data, dict_data, password)
+                        .map_err(|e| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!("개별 파일 해제 실패: {:?}", e),
+                            )
+                        })?;
             }
 
             entries.push(MzarEntry {
@@ -798,7 +859,10 @@ pub fn decompress_non_solid_archive(
             });
         } else if entry_type == 2 {
             if cursor + file_size > data_len {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "중복 참조 경로가 잘렸습니다."));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "중복 참조 경로가 잘렸습니다.",
+                ));
             }
             let ref_bytes = &archive_bytes[cursor..cursor + file_size];
             cursor += file_size;
@@ -813,4 +877,3 @@ pub fn decompress_non_solid_archive(
 
     serialize_entries(entries)
 }
-

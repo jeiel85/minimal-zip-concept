@@ -18,7 +18,8 @@ use mzc::inspect::inspect_mzc_file;
 ///   성공 시 `Ok(())`를, 실패 시 `Err(오류내용)`를 반환하며, CLI 구동 중 생기는 모든 오류는 자동으로 포착되어 터미널에 에러 로그로 표출됩니다.
 fn main() -> Result<()> {
     // SFX 자가 추출 실행 파일 여부를 먼저 검증합니다.
-    if check_and_run_sfx().context("SFX 자가 추출 실행 과정에서 오류가 발생했습니다.")? {
+    if check_and_run_sfx().context("SFX 자가 추출 실행 과정에서 오류가 발생했습니다.")?
+    {
         return Ok(());
     }
 
@@ -74,6 +75,8 @@ fn main() -> Result<()> {
             password,
             solid,
             non_solid,
+            chunk_size,
+            checksum,
         } => {
             // 출력 파일 경로 자동 추론 (첫 번째 입력 경로 기준)
             let out_file = match output_file {
@@ -93,9 +96,46 @@ fn main() -> Result<()> {
 
             let is_solid = solid && !non_solid;
 
+            // 청크 크기 파싱
+            let chunk_size_bytes = match chunk_size.to_ascii_uppercase().as_str() {
+                "1M" => Some(1_024_000),
+                "2M" => Some(2_048_000),
+                "4M" => Some(4_096_000),
+                "8M" => Some(8_192_000),
+                "16M" => Some(16_384_000),
+                other => {
+                    if let Ok(bytes) = other.parse::<u32>() {
+                        Some(bytes)
+                    } else {
+                        println!(
+                            "경고: 유효하지 않은 청크 크기 '{}'입니다. 기본값인 1MB를 사용합니다.",
+                            other
+                        );
+                        None
+                    }
+                }
+            };
+
+            // 체크섬 유형 파싱
+            let checksum_val = match checksum.to_ascii_lowercase().as_str() {
+                "crc32" => 1,
+                "sha256" => 0,
+                _ => {
+                    println!(
+                        "경고: 유효하지 않은 검증 체크섬 유형 '{}'입니다. sha256을 사용합니다.",
+                        checksum
+                    );
+                    0
+                }
+            };
+
             println!("압축 시작: {:?} -> {:?}", input_paths, out_file);
             println!("알고리즘 모드: {:?}, 엔트로피 코딩: {:?}, 레벨: {}, 델타 필터: {}, BCJ 필터: {}, PNG 필터: {}, LPC 필터: {}, BWT 필터: {}, 솔리드 모드: {}",
                      mode, entropy, level, delta, bcj, png, lpc, bwt, is_solid);
+            println!(
+                "청크 단위 크기: {} (실제 바이트: {:?}), 체크섬 유형: {}",
+                chunk_size, chunk_size_bytes, checksum
+            );
             if let Some(ref path) = dict_file {
                 println!("사용할 사전 파일: {:?}", path);
             }
@@ -125,6 +165,8 @@ fn main() -> Result<()> {
                     bwt,
                     dict_data: dict_bytes.as_deref(),
                     password: password.as_deref(),
+                    chunk_size: chunk_size_bytes,
+                    checksum_type: checksum_val,
                 };
                 mzc::archive::archive_paths_custom(&input_paths, Some(&params))
                     .with_context(|| format!("비솔리드 아카이빙 실패: {:?}", input_paths))?
@@ -134,17 +176,19 @@ fn main() -> Result<()> {
                 let is_multi_or_dir = input_paths.len() > 1 || input_paths[0].is_dir();
                 let original_bytes = if is_multi_or_dir {
                     println!("여러 파일 또는 디렉토리가 감지되었습니다. MZAR 아카이브로 패킹을 먼저 진행합니다.");
-                    mzc::archive::archive_paths(&input_paths)
-                        .with_context(|| format!("입력 파일/디렉토리 아카이빙 실패: {:?}", input_paths))?
+                    mzc::archive::archive_paths(&input_paths).with_context(|| {
+                        format!("입력 파일/디렉토리 아카이빙 실패: {:?}", input_paths)
+                    })?
                 } else {
-                    fs::read(&input_paths[0])
-                        .with_context(|| format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
+                    fs::read(&input_paths[0]).with_context(|| {
+                        format!("원본 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0])
+                    })?
                 };
 
                 // 고도화된 MZC 병렬 청크 압축 파이프라인 구동 (MZC7 기능 포함)
+                let chunk_size = chunk_size_bytes.unwrap_or(1_024_000) as usize;
                 if original_bytes.len() > 100 * 1024 {
                     use indicatif::{ProgressBar, ProgressStyle};
-                    let chunk_size = 1024 * 1024; // 1MB chunks
                     let total_chunks = (original_bytes.len() + chunk_size - 1) / chunk_size;
 
                     println!("대용량 파일 압축 중... (총 {}개 청크)", total_chunks);
@@ -169,6 +213,8 @@ fn main() -> Result<()> {
                         bwt,
                         dict_bytes.as_deref(),
                         password.as_deref(),
+                        chunk_size_bytes,
+                        checksum_val,
                         move |chunk_idx, _total, _, _| {
                             pb_clone.set_position(chunk_idx as u64);
                         },
@@ -188,6 +234,8 @@ fn main() -> Result<()> {
                         bwt,
                         dict_bytes.as_deref(),
                         password.as_deref(),
+                        chunk_size_bytes,
+                        checksum_val,
                         |_, _, _, _| {},
                     )
                 }
@@ -202,7 +250,9 @@ fn main() -> Result<()> {
             let total_compressed_size = final_output.len();
             let original_size = if !is_solid {
                 if let Ok(meta) = mzc::archive::parse_mzar_metadata(&final_output) {
-                    meta.iter().map(|entry| if entry.is_dir { 0 } else { entry.size }).sum::<u64>()
+                    meta.iter()
+                        .map(|entry| if entry.is_dir { 0 } else { entry.size })
+                        .sum::<u64>()
                 } else {
                     0
                 }
@@ -313,9 +363,15 @@ fn main() -> Result<()> {
             // 복원된 데이터가 MZAR 컨테이너 아카이브인지 감지
             if mzc::archive::is_mzar_archive(&decompressed_bytes) {
                 println!("복원된 바이트에서 MZAR 컨테이너 헤더가 감지되었습니다. 폴더 구조 추출을 시작합니다.");
-                mzc::archive::extract_archive(&decompressed_bytes, &out_file, final_password.as_deref(), dict_bytes.as_deref()).with_context(
-                    || format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file),
-                )?;
+                mzc::archive::extract_archive(
+                    &decompressed_bytes,
+                    &out_file,
+                    final_password.as_deref(),
+                    dict_bytes.as_deref(),
+                )
+                .with_context(|| {
+                    format!("디렉토리 추출에 실패했습니다. 타겟 경로: {:?}", out_file)
+                })?;
                 println!("디렉토리 아카이브 복원 성공!");
             } else {
                 fs::write(&out_file, &decompressed_bytes).with_context(|| {
@@ -331,7 +387,6 @@ fn main() -> Result<()> {
             println!("Verified: OK");
         }
 
-        // --- 라운드트립 검증 테스트 (Test) 서브커맨드 실행 분기 ---
         Commands::Test {
             input_paths,
             mode,
@@ -346,6 +401,8 @@ fn main() -> Result<()> {
             password,
             solid,
             non_solid,
+            chunk_size,
+            checksum,
         } => {
             let is_solid = solid && !non_solid;
             println!("라운드트립 자가 검증 테스트 시작: {:?}", input_paths);
@@ -357,6 +414,39 @@ fn main() -> Result<()> {
             if password.is_some() {
                 println!("비밀번호 암호화 테스트가 켜졌습니다.");
             }
+
+            // 청크 크기 파싱
+            let chunk_size_bytes = match chunk_size.to_ascii_uppercase().as_str() {
+                "1M" => Some(1_024_000),
+                "2M" => Some(2_048_000),
+                "4M" => Some(4_096_000),
+                "8M" => Some(8_192_000),
+                "16M" => Some(16_384_000),
+                other => {
+                    if let Ok(bytes) = other.parse::<u32>() {
+                        Some(bytes)
+                    } else {
+                        println!(
+                            "경고: 유효하지 않은 청크 크기 '{}'입니다. 기본값인 1MB를 사용합니다.",
+                            other
+                        );
+                        None
+                    }
+                }
+            };
+
+            // 체크섬 유형 파싱
+            let checksum_val = match checksum.to_ascii_lowercase().as_str() {
+                "crc32" => 1,
+                "sha256" => 0,
+                _ => {
+                    println!(
+                        "경고: 유효하지 않은 검증 체크섬 유형 '{}'입니다. sha256을 사용합니다.",
+                        checksum
+                    );
+                    0
+                }
+            };
 
             let dict_bytes = if let Some(ref path) = dict_file {
                 let bytes = fs::read(path)
@@ -379,11 +469,15 @@ fn main() -> Result<()> {
                     bwt,
                     dict_data: dict_bytes.as_deref(),
                     password: password.as_deref(),
+                    chunk_size: chunk_size_bytes,
+                    checksum_type: checksum_val,
                 };
                 let compressed = mzc::archive::archive_paths_custom(&input_paths, Some(&params))
                     .with_context(|| format!("비솔리드 테스트 아카이빙 실패: {:?}", input_paths))?;
                 let raw_mzar = mzc::archive::archive_paths_custom(&input_paths, None)
-                    .with_context(|| format!("비솔리드 테스트 원본 아카이빙 실패: {:?}", input_paths))?;
+                    .with_context(|| {
+                        format!("비솔리드 테스트 원본 아카이빙 실패: {:?}", input_paths)
+                    })?;
                 (raw_mzar, compressed)
             } else {
                 // 원본 파일/디렉토리 로드 및 아카이빙
@@ -393,8 +487,9 @@ fn main() -> Result<()> {
                     mzc::archive::archive_paths(&input_paths)
                         .with_context(|| format!("테스트 파일 아카이빙 실패: {:?}", input_paths))?
                 } else {
-                    fs::read(&input_paths[0])
-                        .with_context(|| format!("테스트 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0]))?
+                    fs::read(&input_paths[0]).with_context(|| {
+                        format!("테스트 파일 '{:?}'을 읽을 수 없습니다.", input_paths[0])
+                    })?
                 };
 
                 // 1. 메모리상에서 즉각 압축
@@ -410,6 +505,8 @@ fn main() -> Result<()> {
                     bwt,
                     dict_bytes.as_deref(),
                     password.as_deref(),
+                    chunk_size_bytes,
+                    checksum_val,
                     |_, _, _, _| {},
                 );
                 (original_bytes, compressed_bytes)
@@ -420,9 +517,12 @@ fn main() -> Result<()> {
             let total_compressed_size = compressed_bytes.len();
 
             // 2. 메모리상에서 즉각 해제 및 체크섬 검증
-            let decompressed_bytes =
-                mzc::decompress_bytes_v2_dict_password(&compressed_bytes, dict_bytes.as_deref(), password.as_deref())
-                    .context("인메모리 자가 해제 검증 중 오류가 발생했습니다.")?;
+            let decompressed_bytes = mzc::decompress_bytes_v2_dict_password(
+                &compressed_bytes,
+                dict_bytes.as_deref(),
+                password.as_deref(),
+            )
+            .context("인메모리 자가 해제 검증 중 오류가 발생했습니다.")?;
 
             let ratio = if original_size > 0 {
                 (total_compressed_size as f64 / original_size as f64) * 100.0
@@ -512,8 +612,9 @@ fn main() -> Result<()> {
             println!("MZC Multi-Configuration Benchmarking Tool");
             println!("Target File: {:?}", input_file);
 
-            let data = fs::read(&input_file)
-                .with_context(|| format!("벤치마크 대상 파일 '{:?}'을 읽을 수 없습니다.", input_file))?;
+            let data = fs::read(&input_file).with_context(|| {
+                format!("벤치마크 대상 파일 '{:?}'을 읽을 수 없습니다.", input_file)
+            })?;
             let orig_size = data.len();
             if orig_size == 0 {
                 println!("Error: Empty files cannot be benchmarked.");
@@ -533,17 +634,94 @@ fn main() -> Result<()> {
 
             // 비교할 압축 설정 조합 매트릭스 정의
             let matrix = vec![
-                ("MZC1: Rle + None", mzc::CompressionMode::Rle, mzc::EntropyMode::None, false, false, false),
-                ("MZC2: Hybrid + Huffman", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Huffman, false, false, false),
-                ("MZC4: Hybrid + Dynamic", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Dynamic, false, false, false),
-                ("MZC6: Hybrid + ANS", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Ans, false, false, false),
-                ("MZC7: Hybrid + CM", mzc::CompressionMode::Hybrid, mzc::EntropyMode::Cm, false, false, false),
-                ("MZC3: LZ77 + Huffman", mzc::CompressionMode::Lz77, mzc::EntropyMode::Huffman, false, false, false),
-                ("MZC4: LZ77 + Dynamic", mzc::CompressionMode::Lz77, mzc::EntropyMode::Dynamic, false, false, false),
-                ("MZC6: LZ77 + ANS", mzc::CompressionMode::Lz77, mzc::EntropyMode::Ans, false, false, false),
-                ("MZC7: LZ77 + CM", mzc::CompressionMode::Lz77, mzc::EntropyMode::Cm, false, false, false),
-                ("MZC7: LZ77 + CM + BWT", mzc::CompressionMode::Lz77, mzc::EntropyMode::Cm, false, false, true),
-                ("MZC5: LZ77 + Dynamic + Delta + BCJ", mzc::CompressionMode::Lz77, mzc::EntropyMode::Dynamic, true, true, false),
+                (
+                    "MZC1: Rle + None",
+                    mzc::CompressionMode::Rle,
+                    mzc::EntropyMode::None,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC2: Hybrid + Huffman",
+                    mzc::CompressionMode::Hybrid,
+                    mzc::EntropyMode::Huffman,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC4: Hybrid + Dynamic",
+                    mzc::CompressionMode::Hybrid,
+                    mzc::EntropyMode::Dynamic,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC6: Hybrid + ANS",
+                    mzc::CompressionMode::Hybrid,
+                    mzc::EntropyMode::Ans,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC7: Hybrid + CM",
+                    mzc::CompressionMode::Hybrid,
+                    mzc::EntropyMode::Cm,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC3: LZ77 + Huffman",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Huffman,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC4: LZ77 + Dynamic",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Dynamic,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC6: LZ77 + ANS",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Ans,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC7: LZ77 + CM",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Cm,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC7: LZ77 + CM + BWT",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Cm,
+                    false,
+                    false,
+                    true,
+                ),
+                (
+                    "MZC5: LZ77 + Dynamic + Delta + BCJ",
+                    mzc::CompressionMode::Lz77,
+                    mzc::EntropyMode::Dynamic,
+                    true,
+                    true,
+                    false,
+                ),
             ];
 
             let mut results = Vec::new();
@@ -565,6 +743,8 @@ fn main() -> Result<()> {
                     bwt,
                     None,
                     None,
+                    None,
+                    0,
                     |_, _, _, _| {},
                 );
                 let comp_time = start_comp.elapsed().as_secs_f64() * 1000.0;
@@ -603,7 +783,12 @@ fn main() -> Result<()> {
             for res in results {
                 println!(
                     "| {:<36} | {:>13} | {:>9.2}% | {:>14.1}  | {:>14.1}  | {:<6} |",
-                    res.name, res.comp_size, res.ratio, res.comp_time_ms, res.decomp_time_ms, res.status
+                    res.name,
+                    res.comp_size,
+                    res.ratio,
+                    res.comp_time_ms,
+                    res.decomp_time_ms,
+                    res.status
                 );
             }
             println!("+--------------------------------------+---------------+------------+-----------------+-----------------+--------+");
@@ -627,16 +812,16 @@ fn main() -> Result<()> {
 
         // --- SFX (Self-Extracting Executable) 생성 서브커맨드 실행 분기 ---
         Commands::Sfx { mzc_file, out_exe } => {
-            let exe_path = std::env::current_exe()
-                .context("현재 실행 파일 경로를 가져오지 못했습니다.")?;
+            let exe_path =
+                std::env::current_exe().context("현재 실행 파일 경로를 가져오지 못했습니다.")?;
 
-            let mut exe_file = std::fs::File::open(&exe_path)
-                .context("현재 실행 파일을 열 수 없습니다.")?;
+            let mut exe_file =
+                std::fs::File::open(&exe_path).context("현재 실행 파일을 열 수 없습니다.")?;
             let exe_len = exe_file.metadata()?.len();
 
             let mut read_len = exe_len;
             if exe_len >= 12 {
-                use std::io::{Seek, SeekFrom, Read};
+                use std::io::{Read, Seek, SeekFrom};
                 exe_file.seek(SeekFrom::End(-12))?;
                 let mut trailer = [0u8; 12];
                 if exe_file.read_exact(&mut trailer).is_ok() && &trailer[8..12] == b"SFX!" {
@@ -647,7 +832,7 @@ fn main() -> Result<()> {
                 }
             }
 
-            use std::io::{Seek, SeekFrom, Read};
+            use std::io::{Read, Seek, SeekFrom};
             exe_file.seek(SeekFrom::Start(0))?;
             let mut exe_bytes = vec![0u8; read_len as usize];
             exe_file.read_exact(&mut exe_bytes)?;
@@ -668,6 +853,15 @@ fn main() -> Result<()> {
 
             println!("SFX 실행 파일이 성공적으로 생성되었습니다: {:?}", out_exe);
         }
+
+        Commands::Recover {
+            input_file,
+            output_dir,
+        } => {
+            println!("아카이브 복구 시작: {:?}", input_file);
+            mzc::recover::recover_archive(&input_file, &output_dir)
+                .map_err(|e| anyhow::anyhow!("복구 동작 실패: {}", e))?;
+        }
     }
 
     Ok(())
@@ -686,7 +880,7 @@ fn check_and_run_sfx() -> Result<bool> {
         return Ok(false);
     }
 
-    use std::io::{Seek, SeekFrom, Read};
+    use std::io::{Read, Seek, SeekFrom};
     let mut file = file;
     if file.seek(SeekFrom::End(-12)).is_err() {
         return Ok(false);
@@ -725,8 +919,9 @@ fn check_and_run_sfx() -> Result<bool> {
         let decompressed_bytes = mzc::decompress_bytes_v2_dict_password(
             &compressed_bytes,
             None,
-            final_password.as_deref()
-        ).context("SFX payload decompress failed")?;
+            final_password.as_deref(),
+        )
+        .context("SFX payload decompress failed")?;
 
         let mut out_dir = exe_path.clone();
         out_dir.set_extension("");
@@ -737,7 +932,12 @@ fn check_and_run_sfx() -> Result<bool> {
         println!("추출 타겟 디렉토리: {:?}", out_dir);
 
         if mzc::archive::is_mzar_archive(&decompressed_bytes) {
-            mzc::archive::extract_archive(&decompressed_bytes, &out_dir, final_password.as_deref(), None)?;
+            mzc::archive::extract_archive(
+                &decompressed_bytes,
+                &out_dir,
+                final_password.as_deref(),
+                None,
+            )?;
             println!("디렉토리 구조 추출 성공: {:?}", out_dir);
         } else {
             let mut out_file = exe_path.clone();
@@ -750,4 +950,3 @@ fn check_and_run_sfx() -> Result<bool> {
 
     Ok(false)
 }
-

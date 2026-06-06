@@ -634,6 +634,58 @@ fn common_prefix_len(data: &[u8], pos1: usize, pos2: usize, max_len: usize) -> u
     len
 }
 
+pub struct Lz77FastTable {
+    head: Vec<i32>,
+}
+
+impl Lz77FastTable {
+    pub fn new() -> Self {
+        Self {
+            head: vec![-1; 65536],
+        }
+    }
+
+    #[inline(always)]
+    fn hash(b: &[u8]) -> usize {
+        (((b[0] as usize) << 10) ^ ((b[1] as usize) << 5) ^ (b[2] as usize)) & 0xFFFF
+    }
+
+    pub fn find_and_insert(
+        &mut self,
+        data: &[u8],
+        pos: usize,
+        window_size: usize,
+    ) -> Option<(u16, u16)> {
+        if pos + 4 > data.len() {
+            return None;
+        }
+        let h = Self::hash(&data[pos..pos + 3]);
+        let match_pos = self.head[h];
+        self.head[h] = pos as i32;
+
+        if match_pos != -1 {
+            let match_pos = match_pos as usize;
+            let dist = pos - match_pos;
+            if dist <= window_size {
+                let max_possible = std::cmp::min(data.len() - pos, MAX_BLOCK_LEN);
+                let mut len = 0;
+                let simd_enabled = crate::ENABLE_SIMD.load(std::sync::atomic::Ordering::Relaxed);
+                if simd_enabled {
+                    len = common_prefix_len(data, match_pos, pos, max_possible);
+                } else {
+                    while len < max_possible && data[match_pos + len] == data[pos + len] {
+                        len += 1;
+                    }
+                }
+                if len >= 4 {
+                    return Some((dist as u16, len as u16));
+                }
+            }
+        }
+        None
+    }
+}
+
 pub struct Lz77HashChains {
     head: Vec<i32>,
     prev: Vec<i32>,
@@ -751,6 +803,8 @@ pub fn compress_to_blocks(
 
     let mut chains = Lz77HashChains::new(n);
     let mut inserted_up_to = 0;
+    let mut fast_table = Lz77FastTable::new();
+    let use_fast_mode = config.scan_limit <= 64;
 
     while i < n {
         let mut run_savings = -9999isize;
@@ -800,35 +854,43 @@ pub fn compress_to_blocks(
         let mut lz77_dist = 0u16;
         let mut lz77_len = 0u16;
         if algorithm_type == ALGORITHM_LZ77 {
-            // Catch up insertions up to i-1
-            while inserted_up_to < i {
-                chains.insert(inserted_up_to, data);
-                inserted_up_to += 1;
-            }
-
-            if let Some((dist, len)) =
-                chains.find_match(data, i, config.window_size, config.scan_limit)
-            {
-                let mut defer_match = false;
-                if config.lazy_matching && i + 1 < n {
-                    // Temporarily insert current pos for lazy evaluation
-                    chains.insert(i, data);
-                    inserted_up_to = i + 1;
-                    if let Some((_, next_len)) =
-                        chains.find_match(data, i + 1, config.window_size, config.scan_limit)
-                    {
-                        if next_len > len {
-                            defer_match = true;
-                        }
-                    }
-                }
-
-                if defer_match {
-                    lz77_savings = -9999;
-                } else {
+            if use_fast_mode {
+                if let Some((dist, len)) = fast_table.find_and_insert(data, i, config.window_size) {
                     lz77_dist = dist;
                     lz77_len = len;
                     lz77_savings = len as isize - 5;
+                }
+            } else {
+                // Catch up insertions up to i-1
+                while inserted_up_to < i {
+                    chains.insert(inserted_up_to, data);
+                    inserted_up_to += 1;
+                }
+
+                if let Some((dist, len)) =
+                    chains.find_match(data, i, config.window_size, config.scan_limit)
+                {
+                    let mut defer_match = false;
+                    if config.lazy_matching && i + 1 < n {
+                        // Temporarily insert current pos for lazy evaluation
+                        chains.insert(i, data);
+                        inserted_up_to = i + 1;
+                        if let Some((_, next_len)) =
+                            chains.find_match(data, i + 1, config.window_size, config.scan_limit)
+                        {
+                            if next_len > len {
+                                defer_match = true;
+                            }
+                        }
+                    }
+
+                    if defer_match {
+                        lz77_savings = -9999;
+                    } else {
+                        lz77_dist = dist;
+                        lz77_len = len;
+                        lz77_savings = len as isize - 5;
+                    }
                 }
             }
         }
@@ -1359,7 +1421,8 @@ pub fn rle_decompress_hybrid_slice(
                         found: n - pos,
                     });
                 }
-                out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                out[write_pos..write_pos + block_len]
+                    .copy_from_slice(&payload[pos..pos + block_len]);
                 write_pos += block_len;
                 pos += block_len;
             }
@@ -1525,7 +1588,8 @@ pub fn rle_decompress_hybrid_mzc5_slice(
                             found: n - pos,
                         });
                     }
-                    out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                    out[write_pos..write_pos + block_len]
+                        .copy_from_slice(&payload[pos..pos + block_len]);
                     write_pos += block_len;
                     pos += block_len;
                 }
@@ -1678,7 +1742,8 @@ pub fn rle_decompress_slice(payload: &[u8], out: &mut [u8]) -> Result<(), MzcErr
                         found: n - pos,
                     });
                 }
-                out[write_pos..write_pos + block_len].copy_from_slice(&payload[pos..pos + block_len]);
+                out[write_pos..write_pos + block_len]
+                    .copy_from_slice(&payload[pos..pos + block_len]);
                 write_pos += block_len;
                 pos += block_len;
             }

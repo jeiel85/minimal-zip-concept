@@ -187,6 +187,7 @@ pub fn apply_png_filter(data: &mut [u8]) {
                 data[row_start + col] = orig[row_start + col].wrapping_sub(up);
             }
 
+            #[allow(unused_mut)]
             let mut col = 4;
 
             // x86_64 AVX2 가속 (32바이트씩 병렬 처리)
@@ -455,13 +456,13 @@ fn suffix_array(s: &[u8]) -> Vec<usize> {
     let mut sa: Vec<usize> = (0..n).collect();
     let mut rank: Vec<usize> = s.iter().map(|&x| x as usize).collect();
     let mut k = 1;
-    
+
     let mut sa_temp = vec![0; n];
     let mut sa_out = vec![0; n];
     let mut new_rank = vec![0; n];
     let max_val = n.max(256) + 1;
     let mut count = vec![0; max_val];
-    
+
     while k < n {
         // 1. Sort by secondary key rank[(i + k) % n]
         count.fill(0);
@@ -478,7 +479,7 @@ fn suffix_array(s: &[u8]) -> Vec<usize> {
             count[key] -= 1;
             sa_temp[count[key]] = idx;
         }
-        
+
         // 2. Sort by primary key rank[i]
         count.fill(0);
         for i in 0..n {
@@ -493,24 +494,23 @@ fn suffix_array(s: &[u8]) -> Vec<usize> {
             count[key] -= 1;
             sa_out[count[key]] = idx;
         }
-        
+
         sa.copy_from_slice(&sa_out);
-        
+
         // Recompute ranks
         new_rank[sa[0]] = 0;
         let mut unique_ranks = 1;
         for i in 1..n {
             let prev = sa[i - 1];
             let curr = sa[i];
-            let same = rank[prev] == rank[curr]
-                && rank[(prev + k) % n] == rank[(curr + k) % n];
+            let same = rank[prev] == rank[curr] && rank[(prev + k) % n] == rank[(curr + k) % n];
             if !same {
                 unique_ranks += 1;
             }
             new_rank[curr] = unique_ranks - 1;
         }
         rank.copy_from_slice(&new_rank);
-        
+
         if unique_ranks == n {
             break;
         }
@@ -644,5 +644,3 @@ pub fn inverse_bwt_filter(data: &mut Vec<u8>) {
     data[0..orig_len].copy_from_slice(&restored);
     data.truncate(orig_len);
 }
-
-

@@ -3,7 +3,8 @@ use crate::cli::{CompressionMode, EntropyMode};
 use crate::format::{
     MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
     FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
-    VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6, VERSION_MZC7,
+    HEADER_SIZE_MZC9, VERSION_MZC2, VERSION_MZC3, VERSION_MZC4, VERSION_MZC5, VERSION_MZC6,
+    VERSION_MZC7, VERSION_MZC8, VERSION_MZC9,
 };
 use crate::huffman::{huffman_decompress, huffman_decompress_dynamic};
 use crate::rle::Dictionary;
@@ -63,6 +64,7 @@ enum TaskResult {
         mzar_meta: Option<Vec<crate::archive::MzarEntryMetadata>>,
         mzar_raw_bytes: Option<Vec<u8>>,
         entropy_plot_points: Option<Vec<(f64, f64)>>,
+        compressed_bytes: Vec<u8>,
     },
     DecompressDone {
         restored_size: u64,
@@ -252,6 +254,7 @@ pub struct MzcGuiApp {
     mzar_metadata: Option<Vec<crate::archive::MzarEntryMetadata>>,
     mzar_raw_bytes: Option<Vec<u8>>,
     entropy_plot_points: Option<Vec<(f64, f64)>>,
+    last_compressed_bytes: Option<Vec<u8>>,
 }
 
 impl MzcGuiApp {
@@ -361,6 +364,7 @@ impl MzcGuiApp {
             mzar_metadata: None,
             mzar_raw_bytes: None,
             entropy_plot_points: None,
+            last_compressed_bytes: None,
         }
     }
 
@@ -395,13 +399,17 @@ impl MzcGuiApp {
     }
 
     fn render_file_tree(ui: &mut egui::Ui, path: &std::path::Path) {
-        let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
         if path.is_dir() {
             egui::CollapsingHeader::new(format!("📂 {}", name))
                 .default_open(true)
                 .show(ui, |ui| {
                     if let Ok(entries) = std::fs::read_dir(path) {
-                        let mut entry_paths: Vec<_> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+                        let mut entry_paths: Vec<_> =
+                            entries.filter_map(Result::ok).map(|e| e.path()).collect();
                         entry_paths.sort_by(|a, b| {
                             let a_is_dir = a.is_dir();
                             let b_is_dir = b.is_dir();
@@ -603,8 +611,11 @@ impl MzcGuiApp {
                     bwt: false,
                     dict_data: dict_bytes.as_deref(),
                     password: password.as_deref(),
+                    chunk_size: None,
+                    checksum_type: 0,
                 };
-                crate::archive::archive_paths_custom(&[path.clone()], Some(&params)).map_err(|e| e.to_string())
+                crate::archive::archive_paths_custom(&[path.clone()], Some(&params))
+                    .map_err(|e| e.to_string())
             } else {
                 if path.is_dir() {
                     crate::archive::archive_directory(&path).map_err(|e| e.to_string())
@@ -620,19 +631,31 @@ impl MzcGuiApp {
                     let mut run_count = 0;
                     let mut token_count = 0;
                     let mut backref_count = 0;
-                    let mut format_desc = String::new();
+                    let format_desc;
 
                     let (final_output, orig_size, mzar_meta, mzar_raw_bytes, sha256) = if !solid {
-                        let raw_mzar = crate::archive::decompress_non_solid_archive(&original_bytes, password.as_deref(), dict_bytes.as_deref())
-                            .unwrap_or_else(|_| original_bytes.clone());
+                        let raw_mzar = crate::archive::decompress_non_solid_archive(
+                            &original_bytes,
+                            password.as_deref(),
+                            dict_bytes.as_deref(),
+                        )
+                        .unwrap_or_else(|_| original_bytes.clone());
                         let meta = crate::archive::parse_mzar_metadata(&original_bytes).ok();
-                        let total_orig_size = meta.as_ref().map(|list| list.iter().map(|e| if e.is_dir { 0 } else { e.size }).sum::<u64>()).unwrap_or(0);
+                        let total_orig_size = meta
+                            .as_ref()
+                            .map(|list| {
+                                list.iter()
+                                    .map(|e| if e.is_dir { 0 } else { e.size })
+                                    .sum::<u64>()
+                            })
+                            .unwrap_or(0);
                         let sha = crate::checksum::bytes_to_hex(&calculate_sha256(&raw_mzar));
                         format_desc = "MZAR (Non-Solid Archiving Container)".to_string();
                         (original_bytes, total_orig_size, meta, Some(raw_mzar), sha)
                     } else {
                         let orig_size = original_bytes.len() as u64;
-                        let sha256_orig = crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
+                        let sha256_orig =
+                            crate::checksum::bytes_to_hex(&calculate_sha256(&original_bytes));
 
                         // 실시간 청크 전송 콜백과 함께 라이브러리 압축 구동
                         let tx_progress = tx.clone();
@@ -648,6 +671,8 @@ impl MzcGuiApp {
                             false, // bwt
                             dict_bytes.as_deref(),
                             password.as_deref(),
+                            None, // chunk_size
+                            0,    // checksum_type
                             move |chunk_idx, orig_size, comp_size, duration| {
                                 let _ = tx_progress.send(TaskResult::ChunkProgress {
                                     chunk_idx,
@@ -663,7 +688,9 @@ impl MzcGuiApp {
                         if let Ok(header) = MzcHeader::from_bytes(&final_output) {
                             version_mzc7 = header.version == VERSION_MZC7;
                             version_mzc5 = header.version == VERSION_MZC5;
-                            let header_size = if header.version >= VERSION_MZC2 {
+                            let header_size = if header.version == VERSION_MZC9 {
+                                HEADER_SIZE_MZC9
+                            } else if header.version >= VERSION_MZC2 {
                                 HEADER_SIZE_MZC2
                             } else {
                                 HEADER_SIZE_MZC1
@@ -680,7 +707,8 @@ impl MzcGuiApp {
                                     }
                                     let chunk_orig_size = u32::from_le_bytes(
                                         payload_bytes[pos..pos + 4].try_into().unwrap(),
-                                    ) as usize;
+                                    )
+                                        as usize;
                                     let comb_size = u32::from_le_bytes(
                                         payload_bytes[pos + 4..pos + 8].try_into().unwrap(),
                                     ) as usize;
@@ -716,7 +744,8 @@ impl MzcGuiApp {
                                                             & FILTER_DYNAMIC_HUFFMAN)
                                                             == 0)
                                                     && (header.version < VERSION_MZC6
-                                                        || (header.algorithm_type & FILTER_ANS) == 0)),
+                                                        || (header.algorithm_type & FILTER_ANS)
+                                                            == 0)),
                                             header.version == VERSION_MZC4
                                                 || (header.version >= VERSION_MZC5
                                                     && (header.algorithm_type
@@ -753,7 +782,8 @@ impl MzcGuiApp {
                                         };
                                         (g_dict, unhuff)
                                     } else {
-                                        let dict = Dictionary::from_bytes(&unhuff).unwrap_or_default();
+                                        let dict =
+                                            Dictionary::from_bytes(&unhuff).unwrap_or_default();
                                         let dict_bytes_len = dict.to_bytes().len();
                                         if dict_bytes_len < unhuff.len() {
                                             (dict, unhuff[dict_bytes_len..].to_vec())
@@ -948,6 +978,7 @@ impl MzcGuiApp {
                                 mzar_meta: mzar_meta_final,
                                 mzar_raw_bytes: mzar_raw_bytes_final,
                                 entropy_plot_points,
+                                compressed_bytes: final_output.clone(),
                             });
                         }
                         Err(e) => {
@@ -963,7 +994,12 @@ impl MzcGuiApp {
     }
 
     /// **비동기 압축 해제 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
-    fn spawn_decompress_task(&self, path: PathBuf, dict_path: Option<PathBuf>, password: Option<String>) {
+    fn spawn_decompress_task(
+        &self,
+        path: PathBuf,
+        dict_path: Option<PathBuf>,
+        password: Option<String>,
+    ) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || match std::fs::read(&path) {
             Ok(compressed_bytes) => {
@@ -973,7 +1009,11 @@ impl MzcGuiApp {
                     None
                 };
 
-                match crate::decompress_bytes_v2_dict_password(&compressed_bytes, dict_bytes.as_deref(), password.as_deref()) {
+                match crate::decompress_bytes_v2_dict_password(
+                    &compressed_bytes,
+                    dict_bytes.as_deref(),
+                    password.as_deref(),
+                ) {
                     Ok(restored_bytes) => {
                         let restored_size = restored_bytes.len() as u64;
                         let sha256 =
@@ -982,8 +1022,13 @@ impl MzcGuiApp {
                         let mut saved_path = path.clone();
                         let write_res = if crate::archive::is_mzar_archive(&restored_bytes) {
                             saved_path.set_extension("extracted");
-                            crate::archive::extract_archive(&restored_bytes, &saved_path, password.as_deref(), dict_bytes.as_deref())
-                                .map_err(|e| e.to_string())
+                            crate::archive::extract_archive(
+                                &restored_bytes,
+                                &saved_path,
+                                password.as_deref(),
+                                dict_bytes.as_deref(),
+                            )
+                            .map_err(|e| e.to_string())
                         } else {
                             saved_path.set_extension("restored.txt");
                             std::fs::write(&saved_path, &restored_bytes).map_err(|e| e.to_string())
@@ -1015,12 +1060,19 @@ impl MzcGuiApp {
     }
 
     /// **비동기 분석(Inspect) 태스크를 백그라운드 스레드에 위임(Spawn)합니다.**
-    fn spawn_inspect_task(&self, path: PathBuf, dict_path: Option<PathBuf>, password: Option<String>) {
+    fn spawn_inspect_task(
+        &self,
+        path: PathBuf,
+        dict_path: Option<PathBuf>,
+        password: Option<String>,
+    ) {
         let tx = self.task_sender.clone();
         std::thread::spawn(move || match std::fs::read(&path) {
             Ok(file_bytes) => match MzcHeader::from_bytes(&file_bytes) {
                 Ok(header) => {
-                    let header_size = if header.version >= VERSION_MZC2 {
+                    let header_size = if header.version == VERSION_MZC9 {
+                        HEADER_SIZE_MZC9
+                    } else if header.version >= VERSION_MZC2 {
                         HEADER_SIZE_MZC2
                     } else {
                         HEADER_SIZE_MZC1
@@ -1032,7 +1084,11 @@ impl MzcGuiApp {
                         None
                     };
 
-                    let format_desc = if header.version == VERSION_MZC7 {
+                    let format_desc = if header.version == VERSION_MZC9 {
+                        "MZC9 (Minimal Zip Concept v9 - Configurable Chunks & Solid)"
+                    } else if header.version == VERSION_MZC8 {
+                        "MZC8 (Minimal Zip Concept v8 - AES-256 Encrypted Payload)"
+                    } else if header.version == VERSION_MZC7 {
                         "MZC7 (Minimal Zip Concept v7 - Context Mixing & Media)"
                     } else if header.version == VERSION_MZC6 {
                         "MZC6 (Minimal Zip Concept v6 - ANS Table)"
@@ -1353,8 +1409,9 @@ impl MzcGuiApp {
                     let decompressed_bytes = crate::decompress_bytes_v2_dict_password(
                         &file_bytes,
                         dict_bytes.as_deref(),
-                        password.as_deref()
-                    ).ok();
+                        password.as_deref(),
+                    )
+                    .ok();
 
                     let mzar_meta = decompressed_bytes.as_ref().and_then(|bytes| {
                         if crate::archive::is_mzar_archive(bytes) {
@@ -1800,6 +1857,7 @@ impl eframe::App for MzcGuiApp {
                     mzar_meta,
                     mzar_raw_bytes,
                     entropy_plot_points,
+                    compressed_bytes,
                 } => {
                     self.is_processing = false;
                     self.original_size = orig_size;
@@ -1817,6 +1875,7 @@ impl eframe::App for MzcGuiApp {
                     self.mzar_metadata = mzar_meta;
                     self.mzar_raw_bytes = mzar_raw_bytes;
                     self.entropy_plot_points = entropy_plot_points;
+                    self.last_compressed_bytes = Some(compressed_bytes);
                     self.status = format!(
                         "압축 성공! 저장됨: {:?}",
                         saved_path.file_name().unwrap_or(saved_path.as_os_str())
@@ -2124,7 +2183,7 @@ impl eframe::App for MzcGuiApp {
                             egui::TextEdit::singleline(&mut self.password)
                                 .password(true)
                                 .hint_text("비밀번호 입력 (선택사항)")
-                                .desired_width(170.0)
+                                .desired_width(170.0),
                         );
                         if !self.password.is_empty() {
                             if ui.button("❌").clicked() {
@@ -2235,7 +2294,11 @@ impl eframe::App for MzcGuiApp {
                             } else {
                                 Some(self.password.clone())
                             };
-                            self.spawn_decompress_task(path.clone(), self.dict_path.clone(), pwd_opt);
+                            self.spawn_decompress_task(
+                                path.clone(),
+                                self.dict_path.clone(),
+                                pwd_opt,
+                            );
                         }
 
                         ui.add_space(6.0);
@@ -2247,7 +2310,11 @@ impl eframe::App for MzcGuiApp {
                         if inspect_btn.clicked() {
                             self.is_processing = true;
                             self.status = "MZC 구조화 매직 검출 및 헤더 분석 중...".to_string();
-                            let pwd_opt = if self.password.is_empty() { None } else { Some(self.password.clone()) };
+                            let pwd_opt = if self.password.is_empty() {
+                                None
+                            } else {
+                                Some(self.password.clone())
+                            };
                             self.spawn_inspect_task(path.clone(), self.dict_path.clone(), pwd_opt);
                         }
                     } else {
@@ -2349,6 +2416,7 @@ impl eframe::App for MzcGuiApp {
                 ui.selectable_value(&mut self.active_tab, 3, "⚔ Benchmark (실시간 비교 벤치마크)");
                 ui.selectable_value(&mut self.active_tab, 4, "🔬 CM Visualizer (확률 노드 시각화)");
                 ui.selectable_value(&mut self.active_tab, 5, "🧩 LZ77 Simulator (슬라이딩 윈도우 시뮬레이터)");
+                ui.selectable_value(&mut self.active_tab, 6, "🔬 Binary Inspector (구조 및 바이너리 맵)");
             });
             ui.separator();
 
@@ -3275,6 +3343,10 @@ impl eframe::App for MzcGuiApp {
                 5 => {
                     self.render_lz77_visualizer(ui);
                 }
+                // ================== Tab 6: Binary Inspector ==================
+                6 => {
+                    self.render_binary_inspector(ui);
+                }
                 _ => {}
             }
         });
@@ -3737,6 +3809,264 @@ impl MzcGuiApp {
 
         self.lz77_steps = steps;
         self.lz77_current_step = 0;
+    }
+
+    fn render_binary_inspector(&mut self, ui: &mut egui::Ui) {
+        ui.heading("🔬 Binary Structure Inspector & Hex Viewer");
+        ui.label("현재 압축 완료되었거나 로드된 MZC 파일의 내부 바이너리 구조를 파싱하여 영역별로 색상 시각화 및 오프셋 정보(마우스 툴팁)를 제공합니다.");
+        ui.add_space(10.0);
+
+        // Load bytes if not already loaded but we have an input_path
+        if self.last_compressed_bytes.is_none() {
+            if let Some(ref path) = self.input_path {
+                if path.is_file() {
+                    if let Ok(bytes) = std::fs::read(path) {
+                        self.last_compressed_bytes = Some(bytes);
+                    }
+                }
+            }
+        }
+
+        if let Some(ref bytes) = self.last_compressed_bytes {
+            if bytes.is_empty() {
+                ui.colored_label(egui::Color32::LIGHT_RED, "바이너리 데이터가 비어 있습니다.");
+                return;
+            }
+
+            // Legend / 설명 범례
+            ui.horizontal(|ui| {
+                ui.colored_label(egui::Color32::from_rgb(0, 188, 212), "■ 파일 헤더 (Header)");
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 235, 59),
+                    "■ 전역 사전 (Global Dict)",
+                );
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 152, 0),
+                    "■ 청크 헤더 (Chunk Header)",
+                );
+                ui.colored_label(
+                    egui::Color32::from_rgb(33, 150, 243),
+                    "■ 청크 페이로드 (Chunk Payload)",
+                );
+            });
+            ui.add_space(6.0);
+
+            // Parsing to sections
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            enum ByteSection {
+                Header,
+                GlobalDict,
+                ChunkHeader(usize),
+                ChunkPayload(usize),
+                Unknown,
+            }
+
+            let mut section_map = vec![ByteSection::Unknown; bytes.len()];
+
+            let mut header_version = 0;
+            let mut dict_size = 0;
+
+            if let Ok(header) = crate::format::MzcHeader::from_bytes(bytes) {
+                header_version = header.version;
+                let header_size = if header.version == 9 {
+                    64
+                } else if header.version >= 2 {
+                    56
+                } else {
+                    54
+                };
+
+                for i in 0..std::cmp::min(header_size, bytes.len()) {
+                    section_map[i] = ByteSection::Header;
+                }
+
+                dict_size = header.dictionary_size as usize;
+                let dict_start = header_size;
+                let dict_end = dict_start + dict_size;
+
+                for i in dict_start..std::cmp::min(dict_end, bytes.len()) {
+                    section_map[i] = ByteSection::GlobalDict;
+                }
+
+                let mut pos = dict_end;
+                let mut chunk_idx = 0;
+                while pos + 12 <= bytes.len() {
+                    for i in pos..(pos + 12) {
+                        section_map[i] = ByteSection::ChunkHeader(chunk_idx);
+                    }
+
+                    let comp_size_bytes: [u8; 4] =
+                        bytes[pos + 8..pos + 12].try_into().unwrap_or([0; 4]);
+                    let comp_size = u32::from_le_bytes(comp_size_bytes) as usize;
+
+                    pos += 12;
+
+                    let payload_end = std::cmp::min(pos + comp_size, bytes.len());
+                    for i in pos..payload_end {
+                        section_map[i] = ByteSection::ChunkPayload(chunk_idx);
+                    }
+
+                    pos += comp_size;
+                    chunk_idx += 1;
+                    if pos >= bytes.len() {
+                        break;
+                    }
+                }
+            } else {
+                // If it starts with b"MZAR" (unpacking container)
+                if bytes.starts_with(b"MZAR") {
+                    for i in 0..std::cmp::min(4, bytes.len()) {
+                        section_map[i] = ByteSection::Header;
+                    }
+                }
+            }
+
+            // Summary
+            ui.horizontal(|ui| {
+                ui.label(format!("총 크기: {} bytes", bytes.len()));
+                if header_version > 0 {
+                    ui.label(format!("| MZC 버전: v{}", header_version));
+                    ui.label(format!("| 사전 크기: {} bytes", dict_size));
+                }
+            });
+            ui.add_space(4.0);
+
+            // Hex Viewer area
+            let bytes_per_row = 16;
+            let total_rows = (bytes.len() + bytes_per_row - 1) / bytes_per_row;
+            let row_height = 20.0;
+
+            egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(400.0).show_rows(
+                    ui,
+                    row_height,
+                    total_rows,
+                    |ui, row_range| {
+                        for row in row_range {
+                            let start_offset = row * bytes_per_row;
+
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 3.0;
+
+                                // Offset (Hex)
+                                ui.monospace(format!("{:08X}:", start_offset));
+                                ui.add_space(6.0);
+
+                                // 16 bytes
+                                for i in 0..bytes_per_row {
+                                    let offset = start_offset + i;
+                                    if offset < bytes.len() {
+                                        let val = bytes[offset];
+                                        let section = section_map[offset];
+
+                                        let color = match section {
+                                            ByteSection::Header => {
+                                                egui::Color32::from_rgb(0, 188, 212)
+                                            }
+                                            ByteSection::GlobalDict => {
+                                                egui::Color32::from_rgb(255, 235, 59)
+                                            }
+                                            ByteSection::ChunkHeader(_) => {
+                                                egui::Color32::from_rgb(255, 152, 0)
+                                            }
+                                            ByteSection::ChunkPayload(_) => {
+                                                egui::Color32::from_rgb(33, 150, 243)
+                                            }
+                                            ByteSection::Unknown => {
+                                                egui::Color32::from_rgb(180, 180, 180)
+                                            }
+                                        };
+
+                                        let label = ui.add(egui::Label::new(
+                                            egui::RichText::new(format!("{:02X}", val))
+                                                .color(color)
+                                                .monospace(),
+                                        ));
+
+                                        // Tooltip
+                                        label.on_hover_ui(|ui| {
+                                            ui.label(format!(
+                                                "Offset: {} (0x{:X})",
+                                                offset, offset
+                                            ));
+                                            match section {
+                                                ByteSection::Header => {
+                                                    ui.label("파일 헤더 (Header)");
+                                                }
+                                                ByteSection::GlobalDict => {
+                                                    ui.label(format!(
+                                                        "전역 공유 사전 (Global Dict, {} bytes)",
+                                                        dict_size
+                                                    ));
+                                                }
+                                                ByteSection::ChunkHeader(idx) => {
+                                                    ui.label(format!(
+                                                        "청크 {} 헤더 (Chunk Header, 12 bytes)",
+                                                        idx
+                                                    ));
+                                                }
+                                                ByteSection::ChunkPayload(idx) => {
+                                                    ui.label(format!(
+                                                        "청크 {} 압축 페이로드 (Chunk Payload)",
+                                                        idx
+                                                    ));
+                                                }
+                                                ByteSection::Unknown => {
+                                                    ui.label("미파싱 영역 또는 패딩 / MZAR 헤더");
+                                                }
+                                            }
+                                        });
+                                    } else {
+                                        ui.monospace("  ");
+                                    }
+                                }
+
+                                ui.add_space(10.0);
+
+                                // ASCII presentation
+                                for i in 0..bytes_per_row {
+                                    let offset = start_offset + i;
+                                    if offset < bytes.len() {
+                                        let val = bytes[offset];
+                                        let section = section_map[offset];
+                                        let c = if val >= 32 && val <= 126 {
+                                            val as char
+                                        } else {
+                                            '.'
+                                        };
+
+                                        let color = match section {
+                                            ByteSection::Header => {
+                                                egui::Color32::from_rgb(0, 188, 212)
+                                            }
+                                            ByteSection::GlobalDict => {
+                                                egui::Color32::from_rgb(255, 235, 59)
+                                            }
+                                            ByteSection::ChunkHeader(_) => {
+                                                egui::Color32::from_rgb(255, 152, 0)
+                                            }
+                                            ByteSection::ChunkPayload(_) => {
+                                                egui::Color32::from_rgb(33, 150, 243)
+                                            }
+                                            ByteSection::Unknown => {
+                                                egui::Color32::from_rgb(180, 180, 180)
+                                            }
+                                        };
+
+                                        ui.colored_label(color, c.to_string());
+                                    }
+                                }
+                            });
+                        }
+                    },
+                );
+            });
+        } else {
+            ui.colored_label(
+                egui::Color32::LIGHT_GRAY,
+                "바이너리 데이터를 불러오려면 먼저 파일 압축을 진행하거나 파일 열기를 해주세요.",
+            );
+        }
     }
 }
 

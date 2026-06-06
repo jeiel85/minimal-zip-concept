@@ -1,5 +1,11 @@
 use sha2::{Digest, Sha256};
 
+pub fn calculate_crc32(data: &[u8]) -> u32 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(data);
+    hasher.finalize()
+}
+
 /// 주어진 바이트 슬라이스(&[u8])의 SHA-256 해시 값을 계산하여 32바이트 고정 크기 배열로 반환합니다.
 ///
 /// # Rust 개념 설명:

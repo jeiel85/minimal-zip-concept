@@ -119,6 +119,14 @@ pub enum Commands {
         /// 개별 파일 압축 모드 활성화 (비솔리드)
         #[arg(long, overrides_with = "solid")]
         non_solid: bool,
+
+        /// 병렬 청크 압축 단위 크기 (예: 1M, 2M, 4M, 8M, 16M)
+        #[arg(long, default_value = "1M")]
+        chunk_size: String,
+
+        /// 무결성 체크 해시 유형 (sha256 또는 crc32)
+        #[arg(long, default_value = "sha256")]
+        checksum: String,
     },
 
     /// MZC 압축 파일을 읽어 원래 파일로 원상 복구하며, SHA-256 검증을 수행합니다.
@@ -193,6 +201,14 @@ pub enum Commands {
         /// 개별 파일 압축 모드 활성화 (비솔리드)
         #[arg(long, overrides_with = "solid")]
         non_solid: bool,
+
+        /// 병렬 청크 압축 단위 크기 (예: 1M, 2M, 4M, 8M, 16M)
+        #[arg(long, default_value = "1M")]
+        chunk_size: String,
+
+        /// 무결성 체크 해시 유형 (sha256 또는 crc32)
+        #[arg(long, default_value = "sha256")]
+        checksum: String,
     },
 
     /// 다수의 원본 텍스트/바이너리 샘플로부터 공유 사전을 생성하여 파일로 저장합니다.
@@ -255,4 +271,15 @@ pub enum Commands {
 
     /// 윈도우 마우스 우클릭 메뉴를 해제합니다. (Windows 전용)
     UnregisterContextMenu,
+
+    /// 손상된 MZC 또는 MZAR 아카이브를 스캔하여 복구 가능한 파일들을 추출합니다.
+    Recover {
+        /// 손상된 MZC/MZAR 파일 경로
+        #[arg(value_name = "INPUT_FILE")]
+        input_file: PathBuf,
+
+        /// 복구한 파일들을 저장할 출력 디렉토리 경로
+        #[arg(value_name = "OUTPUT_DIR")]
+        output_dir: PathBuf,
+    },
 }
