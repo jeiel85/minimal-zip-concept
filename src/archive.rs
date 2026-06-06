@@ -47,6 +47,19 @@ pub fn archive_directory_custom(
 ) -> io::Result<Vec<u8>> {
     let mut paths = Vec::new();
     collect_paths(src_dir, src_dir, &mut paths)?;
+    paths.sort_by(|(a, _), (b, _)| {
+        let a_rel = a
+            .strip_prefix(src_dir)
+            .unwrap_or(a)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let b_rel = b
+            .strip_prefix(src_dir)
+            .unwrap_or(b)
+            .to_string_lossy()
+            .replace('\\', "/");
+        a_rel.cmp(&b_rel)
+    });
 
     #[cfg(not(target_arch = "wasm32"))]
     let entries: Vec<MzarEntry> = paths
@@ -150,6 +163,19 @@ pub fn archive_paths_custom(
             // 내부 모든 하위 디렉토리 및 파일들을 수집
             let mut sub_paths = Vec::new();
             collect_paths(path, path, &mut sub_paths)?;
+            sub_paths.sort_by(|(a, _), (b, _)| {
+                let a_rel = a
+                    .strip_prefix(path)
+                    .unwrap_or(a)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let b_rel = b
+                    .strip_prefix(path)
+                    .unwrap_or(b)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                a_rel.cmp(&b_rel)
+            });
 
             for (sub_path, is_dir) in sub_paths {
                 let rel = sub_path
