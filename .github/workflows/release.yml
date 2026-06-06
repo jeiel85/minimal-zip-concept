@@ -97,15 +97,15 @@ jobs:
           # Extract version from tag (e.g. v0.11.1 -> 0.11.1)
           VERSION_DEB=$(echo "${{ github.ref_name }}" | sed 's/^v//')
           
-          cat <<EOF > debian/DEBIAN/control
-Package: mzc
-Version: ${VERSION_DEB}
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: jeiel
-Description: Minimal Zip Concept (MZC) compression utility
-EOF
+          {
+            echo "Package: mzc"
+            echo "Version: ${VERSION_DEB}"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Architecture: amd64"
+            echo "Maintainer: jeiel"
+            echo "Description: Minimal Zip Concept (MZC) compression utility"
+          } > debian/DEBIAN/control
           
           dpkg-deb --build debian mzc_${VERSION_DEB}_amd64.deb
         fi
