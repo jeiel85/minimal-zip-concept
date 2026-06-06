@@ -356,7 +356,7 @@ mod neon_impl {
         w_high_new = vmaxq_s32(w_high_new, min_vec);
         w_high_new = vminq_s32(w_high_new, max_vec);
 
-        let mask_high = vld1q_s32([ -1, 0, 0, 0 ].as_ptr());
+        let mask_high = vld1q_s32([-1, 0, 0, 0].as_ptr());
         w_high_new = vandq_s32(w_high_new, mask_high);
 
         vst1q_s32(weights.as_mut_ptr(), w_low_new);
@@ -503,7 +503,8 @@ pub fn cm_compress(data: &[u8]) -> Result<Vec<u8>, MzcError> {
             let bit = ((byte >> i) & 1) != 0;
             let bit_idx = (7 - i) as usize;
 
-            let (p, p_arr) = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
+            let (p, p_arr) =
+                model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
             encoder.encode_bit(bit, p);
             model.update(
                 ctx_byte,
@@ -548,7 +549,8 @@ pub fn cm_decompress(cm_bytes: &[u8], original_size: usize) -> Result<Vec<u8>, M
         for i in 0..8 {
             let bit_idx = i;
 
-            let (p, p_arr) = model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
+            let (p, p_arr) =
+                model.get_probability(ctx_byte, prev_byte_1, prev_byte_2, prev_byte_3, bit_idx);
             let bit = decoder.decode_bit(p);
 
             byte = (byte << 1) | (bit as u8);

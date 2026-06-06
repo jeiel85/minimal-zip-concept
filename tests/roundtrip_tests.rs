@@ -517,7 +517,7 @@ fn test_deflate_gzip_inflate_direct() {
 fn test_cm_stress() {
     // LCG pseudo-random number generator to avoid dependencies
     let mut seed = 12345u64;
-    let mut next_random_byte = |seed_ref: &mut u64| -> u8 {
+    let next_random_byte = |seed_ref: &mut u64| -> u8 {
         *seed_ref = seed_ref.wrapping_mul(6364136223846793005).wrapping_add(1);
         (*seed_ref >> 32) as u8
     };

@@ -12,12 +12,7 @@ const PBKDF2_ITERATIONS: u32 = 10_000;
 /// Derives a 256-bit key from a password and salt using PBKDF2-HMAC-SHA256.
 pub fn derive_key(password: &str, salt: &[u8; 16]) -> [u8; 32] {
     let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(
-        password.as_bytes(),
-        salt,
-        PBKDF2_ITERATIONS,
-        &mut key,
-    );
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
     key
 }
 
