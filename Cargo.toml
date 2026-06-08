@@ -19,8 +19,13 @@ exclude = [
 ]
 
 
-[lib]
-crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "mzc"
+path = "src/main.rs"
+test = false
+
+[profile.test]
+debug = 0
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
@@ -57,4 +62,3 @@ proptest = "1.4"
 [[bench]]
 name = "compression_bench"
 harness = false
-

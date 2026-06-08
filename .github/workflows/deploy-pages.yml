@@ -27,7 +27,7 @@ jobs:
         with:
           target: wasm32-unknown-unknown
       - name: Build WASM
-        run: cargo build --lib --target wasm32-unknown-unknown --release
+        run: cargo rustc --lib --target wasm32-unknown-unknown --release --crate-type cdylib
       - name: Sync WASM to docs
         run: cp target/wasm32-unknown-unknown/release/mzc.wasm docs/mzc.wasm
       - name: Setup Pages

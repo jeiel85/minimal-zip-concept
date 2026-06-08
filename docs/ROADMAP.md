@@ -1,87 +1,104 @@
 # MZC Roadmap
 
-## Goal 1: MZC1 RLE Compression
+This roadmap reflects the current post-0.12.0 state of MZC. Earlier goals
+(MZC1 RLE, MZC2 dictionary compression, MZC3 LZ77, MZC4 dynamic Huffman,
+MZC5 bit packing, MZC6 tANS/shared dictionaries, and MZC7 context mixing)
+are now implemented research milestones rather than future work.
+
+## Completed Milestones
+
+### MZC1 to MZC7 Core Codec Evolution
+
+- MZC1 RLE fixed-header format with SHA-256 verification.
+- MZC2 dictionary hybrid compression and backward-compatible parsing.
+- MZC3 LZ77 backreferences.
+- MZC4 dynamic Huffman coding.
+- MZC5 bit-packed stream format with BCJ, Delta, and safety checks.
+- MZC6 tANS, hash-chain LZ77, and shared dictionary training.
+- MZC7 context-mixing range coder with PNG Paeth and LPC filters.
+
+### Desktop, WASM, and Archive Layer
+
+- CLI commands for compression, decompression, inspection, training, inflate,
+  benchmarking, SFX packaging, and context-menu registration.
+- egui desktop GUI with dashboard, folder tree, drag-and-drop, entropy plot,
+  update checking, and archive visualization.
+- WASM browser demo and interactive LZ77 visualizer.
+- MZAR archive support with solid/non-solid modes, deduplication, parallel
+  compression/extraction, AES-256 password encryption, and CRC32/SHA-256
+  checksum paths.
+- Self-extracting executable payload support.
+
+## Current Priority: 0.12.x Stabilization
 
 Purpose:
 
-Build the first working version of the compression tool.
+Turn the broad 0.12.0 feature set into a predictable release line.
 
-Features:
+Focus areas:
 
-- Rust CLI
-- Custom MZC1 file format
-- RLE compression
-- RLE decompression
-- SHA-256 verification
-- Inspect command
-- Test command
+- Keep the full codec and archive roundtrip suite green.
+- Keep malformed-input tests panic-free.
+- Keep release workflow assets aligned with the Cargo package version.
+- Keep README, changelog, test plan, and release guide in sync with the actual
+  feature set.
+- Track and remove build warnings that could become future Cargo or Rust errors.
 
 Completion criteria:
 
-- `cargo build` succeeds.
-- `cargo test` succeeds.
-- Compress-decompress roundtrip is byte-perfect.
+- `cargo test --lib` succeeds.
+- Every integration test under `tests/` succeeds.
+- `cargo build --release` succeeds.
+- `cargo rustc --lib --target wasm32-unknown-unknown --release --crate-type cdylib`
+  produces `target/wasm32-unknown-unknown/release/mzc.wasm`.
+- `cargo run -- --version` reports the expected Cargo package version.
+- A sample compress/decompress/inspect flow restores byte-identical data.
 
-## Goal 2: Stability and Test Hardening
+## Next Candidate Goals
 
-Purpose:
+### Goal A: Release Verification Automation
 
-Make MZC1 safer and more reliable.
+Package the manual verification checklist into a repeatable local script or CI
+job that runs the same commands before every tag.
 
-Features:
+Candidate checks:
 
-- More roundtrip tests
-- Invalid file tests
-- Better error messages
-- Edge case handling
-- Empty file support
-- Long run splitting
-- Long literal splitting
-- README and docs cleanup
+- Sequential Rust test matrix.
+- Release build.
+- CLI smoke test with sample files.
+- Archive solid/non-solid smoke tests.
+- WASM build check.
+- Installer metadata/version check.
 
-Completion criteria:
+### Goal B: Archive Format Hardening
 
-- All edge cases are covered by tests.
-- Invalid files fail safely.
-- No panic on malformed input.
+Continue improving MZAR safety and debuggability.
 
-## Goal 3: MZC2 Dictionary Compression Plan
+Candidate work:
 
-Purpose:
+- More corruption tests for entry tables, reference entries, and encrypted
+  archive metadata.
+- Better inspect output for solid vs non-solid archives.
+- Recovery-mode documentation with realistic damaged-archive examples.
 
-Prepare the next format version for text-heavy data.
+### Goal C: Performance Baseline Refresh
 
-MZC2 should target files with repeated words, repeated tokens, repeated JSON keys, sermon scripts, Bible study documents, game data, and configuration files.
+Re-run benchmark tables after each substantial codec change and separate
+research claims from current measured results.
 
-Possible features:
+Candidate work:
 
-- Dictionary section
-- Token blocks
-- Frequent sequence detection
-- RLE-only mode
-- Dictionary-only mode
-- Hybrid mode
-- Compression ratio comparison
+- Criterion baseline snapshots for MZC2 through MZC7.
+- Compression-ratio fixtures for text, binary, image-like, and audio-like data.
+- README benchmark table refresh only from reproducible local outputs.
 
-## Goal 4: MZC3 LZ-Style Experiment
+### Goal D: Public Distribution Polish
 
-Purpose:
+Make the user-facing install/update path boring and reliable.
 
-Experiment with sliding-window compression.
+Candidate work:
 
-Possible features:
-
-- Back-reference blocks
-- Window size configuration
-- Match length and distance encoding
-- Comparison with MZC1 and MZC2
-
-## Goal 5: GUI or App Integration
-
-Possible directions:
-
-- Windows desktop GUI
-- Android demo app
-- Game data packing tool
-- Sermon text archive compressor
-- Pixel art asset packer
+- Keep GitHub release assets, installer metadata, `latest_version.json`, and
+  GUI update checks version-aligned.
+- Verify context-menu registration on a clean Windows environment.
+- Keep Homebrew/Scoop manifests current after release tags.

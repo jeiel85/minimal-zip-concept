@@ -61,8 +61,7 @@ fn main() -> Result<()> {
     match cli.command {
         // --- 압축 (Compress) 서브커맨드 실행 분기 ---
         Commands::Compress {
-            input_paths,
-            output_file,
+            paths,
             mode,
             entropy,
             level,
@@ -78,6 +77,8 @@ fn main() -> Result<()> {
             chunk_size,
             checksum,
         } => {
+            let (input_paths, output_file) = split_compress_paths(paths);
+
             // 출력 파일 경로 자동 추론 (첫 번째 입력 경로 기준)
             let out_file = match output_file {
                 Some(path) => path,
@@ -865,6 +866,32 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn split_compress_paths(
+    mut paths: Vec<std::path::PathBuf>,
+) -> (Vec<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    if paths.len() < 2 {
+        return (paths, None);
+    }
+
+    let last = paths.last().cloned();
+    let explicit_output = last.as_ref().is_some_and(|path| {
+        !path.exists()
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    matches!(ext.to_ascii_lowercase().as_str(), "mzc" | "mzar" | "exe")
+                })
+    });
+
+    if explicit_output {
+        let output_file = paths.pop();
+        (paths, output_file)
+    } else {
+        (paths, None)
+    }
 }
 
 /// **현재 바이너리가 SFX 자가 추출 실행 파일인지 탐지하고, 맞을 경우 페이로드를 임시메모리에 복원 후 추출을 구동합니다.**

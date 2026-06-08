@@ -135,7 +135,7 @@ jobs:
         target: wasm32-unknown-unknown
 
     - name: Build WASM binary
-      run: cargo build --lib --target wasm32-unknown-unknown --release
+      run: cargo rustc --lib --target wasm32-unknown-unknown --release --crate-type cdylib
 
     - name: Package WASM
       run: |

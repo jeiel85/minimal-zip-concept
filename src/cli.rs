@@ -12,7 +12,7 @@ use std::path::PathBuf;
 #[command(
     name = "mzc",
     author = "Antigravity",
-    version = "0.9.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "Minimal Zip Concept - RLE, 사전, LZ77 및 Context Mixing 기반 고도화 무손실 압축 CLI 도구 (MZC 포맷)",
     long_about = "MZC는 압축 알고리즘의 원리를 공부하고 직접 구현해 보는 Rust 학습용 무손실 압축 프로그램입니다."
 )]
@@ -64,13 +64,9 @@ pub enum EntropyMode {
 pub enum Commands {
     /// 원본 파일들을 MZC 압축 파일로 변환합니다.
     Compress {
-        /// 압축할 원본 파일 또는 디렉토리들의 경로
-        #[arg(value_name = "INPUT_PATHS", num_args = 1..)]
-        input_paths: Vec<PathBuf>,
-
-        /// 생성할 압축 파일의 출력 경로 (생략 시 원래 파일명에 .mzc가 붙어 자동 생성됨)
-        #[arg(value_name = "OUTPUT_FILE")]
-        output_file: Option<PathBuf>,
+        /// 압축할 원본 파일/디렉토리 경로와 선택적 출력 경로
+        #[arg(value_name = "PATHS", num_args = 1..)]
+        paths: Vec<PathBuf>,
 
         /// 압축 알고리즘의 동작 모드 선택
         #[arg(long, value_enum, default_value_t = CompressionMode::Hybrid)]
