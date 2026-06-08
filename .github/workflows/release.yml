@@ -148,10 +148,37 @@ jobs:
         name: mzc-wasm
         path: wasm-dist/mzc.wasm
 
+  verify-release:
+    name: Verify Release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        target: wasm32-unknown-unknown
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtk-3-dev libglib2.0-dev libx11-dev libasound2-dev
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: verify-release
+
+    - name: Run full release verification
+      shell: pwsh
+      run: ./scripts/verify-release.ps1 -Mode Full
+
   create-github-release:
     name: Create GitHub Release
     if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-    needs: [build-release, build-wasm]
+    needs: [build-release, build-wasm, verify-release]
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository

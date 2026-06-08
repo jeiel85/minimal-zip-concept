@@ -89,7 +89,13 @@ Expected:
 
 ## 3. Release Verification Commands
 
-Run these commands sequentially from the repository root:
+Run the scripted release check from the repository root:
+
+```powershell
+./scripts/verify-release.ps1 -Mode Full
+```
+
+The script runs these commands sequentially:
 
 ```bash
 cargo test --lib
@@ -102,6 +108,12 @@ cargo test --test property_tests
 cargo build --release
 cargo rustc --lib --target wasm32-unknown-unknown --release --crate-type cdylib
 cargo run -- --version
+```
+
+For a shorter CI-style local check:
+
+```powershell
+./scripts/verify-release.ps1 -Mode Fast -SkipReleaseBuild -SkipWasm -SkipSmoke
 ```
 
 Expected:

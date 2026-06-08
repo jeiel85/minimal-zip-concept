@@ -41,7 +41,8 @@ jobs:
       run: cargo clippy --all-targets
 
     - name: Run cargo test
-      run: cargo test --all-targets -- --nocapture
+      shell: pwsh
+      run: ./scripts/verify-release.ps1 -Mode Fast -SkipReleaseBuild -SkipWasm -SkipSmoke
 
   coverage:
     name: Code Coverage
