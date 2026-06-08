@@ -2466,7 +2466,7 @@ impl eframe::App for MzcGuiApp {
 
                             let center = rect.center();
                             let radius = 65.0;
-                            let stroke_width = 10.0;
+                            let stroke_width = 10.0_f32;
 
                             // 배경 트랙 원
                             painter.circle_stroke(
@@ -2714,7 +2714,7 @@ impl eframe::App for MzcGuiApp {
                                     };
 
                                     painter.rect_filled(box_rect, 2.0, fill);
-                                    painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(10, 10, 12)));
+                                    painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(10, 10, 12)));
 
                                     if box_rect.width() > 30.0 && box_rect.height() > 14.0 {
                                         let file_basename = std::path::Path::new(&node.name)
