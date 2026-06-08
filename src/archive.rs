@@ -9,6 +9,18 @@ use rayon::prelude::*;
 
 const MZAR_MAGIC: &[u8; 4] = b"MZAR";
 
+fn checked_data_end(
+    cursor: usize,
+    size: usize,
+    data_len: usize,
+    message: &str,
+) -> io::Result<usize> {
+    cursor
+        .checked_add(size)
+        .filter(|end| *end <= data_len)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, message))
+}
+
 /// **MZAR 아카이브 압축을 위한 개별 압축 파라미터 구조체**
 #[derive(Debug, Clone)]
 pub struct CompressionParams<'a> {
@@ -437,14 +449,10 @@ pub fn extract_archive(
         if entry_type == 1 {
             dirs_to_create.push(target_path);
         } else if entry_type == 0 {
-            if cursor + file_size > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "파일 데이터가 잘렸습니다.",
-                ));
-            }
-            let mut file_data = archive_bytes[cursor..cursor + file_size].to_vec();
-            cursor += file_size;
+            let data_end =
+                checked_data_end(cursor, file_size, data_len, "파일 데이터가 잘렸습니다.")?;
+            let mut file_data = archive_bytes[cursor..data_end].to_vec();
+            cursor = data_end;
 
             if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
                 file_data =
@@ -459,14 +467,10 @@ pub fn extract_archive(
 
             files_to_write.push((target_path, file_data));
         } else if entry_type == 2 {
-            if cursor + file_size > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "중복 참조 경로가 잘렸습니다.",
-                ));
-            }
-            let ref_bytes = &archive_bytes[cursor..cursor + file_size];
-            cursor += file_size;
+            let data_end =
+                checked_data_end(cursor, file_size, data_len, "중복 참조 경로가 잘렸습니다.")?;
+            let ref_bytes = &archive_bytes[cursor..data_end];
+            cursor = data_end;
             let ref_str = std::str::from_utf8(ref_bytes)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?
                 .to_string();
@@ -635,21 +639,27 @@ pub fn parse_mzar_metadata(archive_bytes: &[u8]) -> io::Result<Vec<MzarEntryMeta
 
         let mut resolved_size = file_size;
         if entry_type == 0 || entry_type == 2 {
-            if cursor + (file_size as usize) > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "파일 데이터 범위를 초과했습니다.",
-                ));
-            }
+            let file_size = usize::try_from(file_size).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "파일 크기가 플랫폼 한계를 초과했습니다.",
+                )
+            })?;
+            let data_end = checked_data_end(
+                cursor,
+                file_size,
+                data_len,
+                "파일 데이터 범위를 초과했습니다.",
+            )?;
             if entry_type == 0 && file_size >= 4 {
-                let entry_data_slice = &archive_bytes[cursor..cursor + (file_size as usize)];
+                let entry_data_slice = &archive_bytes[cursor..data_end];
                 if entry_data_slice.len() >= 4 && &entry_data_slice[0..3] == b"MZC" {
                     if let Ok(mzc_h) = crate::format::MzcHeader::from_bytes(entry_data_slice) {
                         resolved_size = mzc_h.original_size;
                     }
                 }
             }
-            cursor += file_size as usize;
+            cursor = data_end;
         }
 
         entries.push(MzarEntryMetadata {
@@ -731,13 +741,7 @@ pub fn extract_single_file_from_mzar(
 
         let data_offset = cursor;
         if entry_type == 0 || entry_type == 2 {
-            if cursor + file_size > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "파일 데이터가 잘렸습니다.",
-                ));
-            }
-            cursor += file_size;
+            cursor = checked_data_end(cursor, file_size, data_len, "파일 데이터가 잘렸습니다.")?;
         }
 
         entries_map.insert(path_str, (entry_type, file_size, data_offset));
@@ -754,7 +758,13 @@ pub fn extract_single_file_from_mzar(
                     "대상 경로가 디렉토리입니다.",
                 ));
             } else if entry_type == 0 {
-                let mut data = archive_bytes[data_offset..data_offset + size].to_vec();
+                let data_end = checked_data_end(
+                    data_offset,
+                    size,
+                    archive_bytes.len(),
+                    "파일 데이터가 잘렸습니다.",
+                )?;
+                let mut data = archive_bytes[data_offset..data_end].to_vec();
                 if data.len() >= 4 && &data[0..3] == b"MZC" {
                     data = crate::decompress_bytes_v2_dict_password(&data, dict_data, password)
                         .map_err(|e| {
@@ -766,7 +776,13 @@ pub fn extract_single_file_from_mzar(
                 }
                 return Ok(data);
             } else if entry_type == 2 {
-                let ref_bytes = &archive_bytes[data_offset..data_offset + size];
+                let data_end = checked_data_end(
+                    data_offset,
+                    size,
+                    archive_bytes.len(),
+                    "중복 참조 경로가 잘렸습니다.",
+                )?;
+                let ref_bytes = &archive_bytes[data_offset..data_end];
                 let ref_str = std::str::from_utf8(ref_bytes)
                     .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
                 current_target = ref_str.replace('\\', "/");
@@ -857,14 +873,10 @@ pub fn decompress_non_solid_archive(
                 data: Vec::new(),
             });
         } else if entry_type == 0 {
-            if cursor + file_size > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "파일 데이터가 잘렸습니다.",
-                ));
-            }
-            let mut file_data = archive_bytes[cursor..cursor + file_size].to_vec();
-            cursor += file_size;
+            let data_end =
+                checked_data_end(cursor, file_size, data_len, "파일 데이터가 잘렸습니다.")?;
+            let mut file_data = archive_bytes[cursor..data_end].to_vec();
+            cursor = data_end;
 
             if file_data.len() >= 4 && &file_data[0..3] == b"MZC" {
                 file_data =
@@ -884,14 +896,10 @@ pub fn decompress_non_solid_archive(
                 data: file_data,
             });
         } else if entry_type == 2 {
-            if cursor + file_size > data_len {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "중복 참조 경로가 잘렸습니다.",
-                ));
-            }
-            let ref_bytes = &archive_bytes[cursor..cursor + file_size];
-            cursor += file_size;
+            let data_end =
+                checked_data_end(cursor, file_size, data_len, "중복 참조 경로가 잘렸습니다.")?;
+            let ref_bytes = &archive_bytes[cursor..data_end];
+            cursor = data_end;
             entries.push(MzarEntry {
                 relative_path: path_str,
                 entry_type,
