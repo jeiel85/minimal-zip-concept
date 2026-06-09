@@ -18,6 +18,14 @@ To trigger the MZC auto-updater for end users, you need to create a release on G
    - `mzc-setup.exe` (compiled using Inno Setup).
 8. Click **Publish release**.
 
+### Crates.io publishing
+
+The release workflow attempts `cargo publish` only when the repository secret
+`CARGO_REGISTRY_TOKEN` is configured. If the secret is empty or missing, the
+Crates.io job records the skip and finishes successfully. This keeps GitHub
+Releases independent from Crates.io availability while preserving an automatic
+publish path for maintainers who opt in by adding the token.
+
 ---
 
 ## 2. Testing the Auto-update Prompt Locally
