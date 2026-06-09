@@ -1,6 +1,6 @@
 [package]
 name = "mzc"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2021"
 authors = ["Antigravity"]
 description = "Minimal Zip Concept — Advanced lossless compressor & archiver in Rust with LZ77, RLE, tANS, Context Mixing, SIMD, and a premium egui desktop GUI"

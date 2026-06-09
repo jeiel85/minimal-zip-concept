@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.1] - 2026-06-09
+
+### Changed
+- Added a repeatable PowerShell release verification script and wired it into CI and tag release validation.
+- Updated WASM release builds to explicitly emit the `cdylib` artifact required by the browser demo.
+- Aligned installer, sparse-package, and updater version metadata with the Cargo package version.
+
+### Fixed
+- Fixed `mzc --version` reporting the stale `0.9.0` value instead of the Cargo package version.
+- Fixed `mzc compress <input> <output>` panicking during clap positional argument validation.
+- Removed Windows test-build PDB output filename collisions between the native binary and library targets.
+- Fixed the Weekly Fuzz Testing workflow manifest and Linux dependency setup so the fuzz target can run on GitHub Actions.
+- Hardened malformed MZAR parsing against integer overflow panics found by fuzzing.
+
 ## [0.12.0] - 2026-06-05
 
 ### Added
