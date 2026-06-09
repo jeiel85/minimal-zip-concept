@@ -130,7 +130,12 @@ MZC features a real-time graphical diagnostic GUI dashboard built using `egui` a
 ### 4.1 Prerequisites
 - [Rust toolchain installed](https://www.rust-lang.org/tools/install) (Edition 2021)
 
-### 4.2 Build
+### 4.2 Download the latest release
+- Latest version: **v0.12.1**
+- Windows installer: [mzc-setup.exe](https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.12.1/mzc-setup.exe)
+- All release assets: [GitHub Releases](https://github.com/jeiel85/minimal-zip-concept/releases/tag/v0.12.1)
+
+### 4.3 Build
 ```bash
 # Build optimized release binaries (located in target/release/mzc)
 cargo build --release

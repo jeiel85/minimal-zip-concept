@@ -131,7 +131,12 @@ v0.11.1에서 적용된 **AVX2/NEON SIMD 가속** 및 **Radix Suffix Array** 최
 ### 4.1 사전 요구사항
 - [Rust 및 Cargo 도구 체인 설치](https://www.rust-lang.org/tools/install) (Edition 2021 지원)
 
-### 4.2 빌드
+### 4.2 최신 릴리스 다운로드
+- 최신 버전: **v0.12.1**
+- Windows 설치 파일: [mzc-setup.exe](https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.12.1/mzc-setup.exe)
+- 전체 릴리스 자산: [GitHub Releases](https://github.com/jeiel85/minimal-zip-concept/releases/tag/v0.12.1)
+
+### 4.3 빌드
 ```bash
 # 릴리즈 실행 파일 컴파일 (target/release/mzc 생성)
 cargo build --release
