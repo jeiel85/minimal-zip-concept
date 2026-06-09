@@ -1,10 +1,10 @@
 {
-    "version": "0.12.0",
+    "version": "0.12.1",
     "description": "Minimal Zip Concept - A visual educational compressor written in Rust",
     "homepage": "https://github.com/jeiel85/minimal-zip-concept",
     "license": "MIT",
-    "url": "https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.12.0/mzc-windows-x64.zip",
-    "hash": "1007df43bc3c5ddadaa0a4ff4a76ae6d0db5c27a9f95ddd1dc6f1126e35ecc6a",
+    "url": "https://github.com/jeiel85/minimal-zip-concept/releases/download/v0.12.1/mzc-windows-x64.zip",
+    "hash": "6e962598132c2b534258340c3489df65e3f6ac9ef2dc9a45ce9d092bb58bc40a",
     "bin": "mzc.exe",
     "checkver": {
         "github": "https://github.com/jeiel85/minimal-zip-concept"
