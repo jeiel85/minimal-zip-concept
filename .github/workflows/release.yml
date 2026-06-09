@@ -191,11 +191,13 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          */*.tar.gz
-          */*.zip
-          */*.deb
-          */mzc-setup.exe
-          */mzc.wasm
+          mzc-linux-x64/*.tar.gz
+          mzc-linux-x64/*.deb
+          mzc-macos-x64/*.tar.gz
+          mzc-macos-arm64/*.tar.gz
+          mzc-windows-x64/*.zip
+          mzc-windows-x64/mzc-setup.exe
+          mzc-wasm/mzc.wasm
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
