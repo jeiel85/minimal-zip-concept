@@ -723,6 +723,22 @@ fn main() -> Result<()> {
                     true,
                     false,
                 ),
+                (
+                    "MZC9: Deflate (Gzip/Zip Equivalent)",
+                    mzc::CompressionMode::Deflate,
+                    mzc::EntropyMode::None,
+                    false,
+                    false,
+                    false,
+                ),
+                (
+                    "MZC9: Zstandard (zstd Level 3)",
+                    mzc::CompressionMode::Zstd,
+                    mzc::EntropyMode::None,
+                    false,
+                    false,
+                    false,
+                ),
             ];
 
             let mut results = Vec::new();

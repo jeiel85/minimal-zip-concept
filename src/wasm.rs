@@ -53,6 +53,8 @@ pub extern "C" fn wasm_compress(
         1 => CompressionMode::Dict,
         2 => CompressionMode::Hybrid,
         3 => CompressionMode::Lz77,
+        4 => CompressionMode::Deflate,
+        5 => CompressionMode::Zstd,
         _ => CompressionMode::Hybrid,
     };
 
@@ -258,6 +260,8 @@ pub extern "C" fn wasm_compress_v2(
         1 => CompressionMode::Dict,
         2 => CompressionMode::Hybrid,
         3 => CompressionMode::Lz77,
+        4 => CompressionMode::Deflate,
+        5 => CompressionMode::Zstd,
         _ => CompressionMode::Hybrid,
     };
 

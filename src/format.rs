@@ -48,6 +48,8 @@ pub const ALGORITHM_RLE: u8 = 0x01;
 pub const ALGORITHM_DICT: u8 = 0x02;
 pub const ALGORITHM_HYBRID: u8 = 0x03;
 pub const ALGORITHM_LZ77: u8 = 0x04;
+pub const ALGORITHM_DEFLATE: u8 = 0x1C;
+pub const ALGORITHM_ZSTD: u8 = 0xFC;
 
 pub const FILTER_DELTA: u8 = 0x10;
 pub const FILTER_BCJ: u8 = 0x20;

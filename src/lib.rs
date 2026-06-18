@@ -56,7 +56,7 @@ use checksum::{bytes_to_hex, calculate_sha256};
 pub use cli::{CompressionMode, EntropyMode};
 use error::MzcError;
 use format::{
-    MzcHeader, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
+    MzcHeader, ALGORITHM_DEFLATE, ALGORITHM_ZSTD, ALGORITHM_DICT, ALGORITHM_HYBRID, ALGORITHM_LZ77, ALGORITHM_RLE, FILTER_ANS,
     FILTER_BCJ, FILTER_DELTA, FILTER_DYNAMIC_HUFFMAN, HEADER_SIZE_MZC1, HEADER_SIZE_MZC2,
     HEADER_SIZE_MZC8, HEADER_SIZE_MZC9, MAGIC_MZC1, MAGIC_MZC2, MAGIC_MZC3, MAGIC_MZC4, MAGIC_MZC5,
     MAGIC_MZC6, MAGIC_MZC7, MAGIC_MZC9, VERSION_MZC1, VERSION_MZC2, VERSION_MZC4, VERSION_MZC5,
@@ -290,7 +290,7 @@ where
         let encrypted_header = if header.version == VERSION_MZC9 {
             MzcHeader::new_v9(
                 header.algorithm_type,
-                header.checksum_type,
+                header.checksum_type | 0x80,
                 header.original_size,
                 encrypted_payload.len() as u64,
                 header.dictionary_size,
@@ -386,7 +386,7 @@ where
         pos = end;
     }
 
-    let is_v9 = chunk_size.is_some() || checksum_type == 1;
+    let is_v9 = chunk_size.is_some() || checksum_type == 1 || mode == CompressionMode::Deflate || mode == CompressionMode::Zstd;
 
     // MZC7 조건 판단: Context Mixing 엔트로피나 미디어 전용 필터(PNG, LPC, BWT)가 켜진 경우 MZC7 규격 적용
     let is_v7 = entropy == EntropyMode::Cm || png || lpc || bwt;
@@ -409,20 +409,65 @@ where
                 CompressionMode::Dict => ALGORITHM_DICT,
                 CompressionMode::Hybrid => ALGORITHM_HYBRID,
                 CompressionMode::Lz77 => ALGORITHM_LZ77,
+                CompressionMode::Deflate => ALGORITHM_DEFLATE,
+                CompressionMode::Zstd => ALGORITHM_ZSTD,
             };
 
-            // A. 전처리 필터 적용
-            let mut processed_chunk = chunk.to_vec();
-            if uses_extended_flags {
-                // MZC7의 경우 미디어 전용 필터를 최우선 적용합니다.
-                if png {
-                    filters::apply_png_filter(&mut processed_chunk);
-                } else if lpc {
-                    filters::apply_lpc_filter(&mut processed_chunk);
-                } else if bwt {
-                    filters::apply_bwt_filter(&mut processed_chunk);
+            let (chunk_comb_size, final_payload) = if alg_type == ALGORITHM_DEFLATE {
+                let compressed = {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        use flate2::write::DeflateEncoder;
+                        use flate2::Compression;
+                        use std::io::Write;
+                        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::new(level as u32));
+                        encoder.write_all(chunk).map_err(|e| MzcError::IoError(e.to_string()))?;
+                        encoder.finish().map_err(|e| MzcError::IoError(e.to_string()))?
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return Err(MzcError::IoError("Deflate is not supported on WASM target".to_string()));
+                    }
+                };
+                (chunk_orig_size, compressed)
+            } else if alg_type == ALGORITHM_ZSTD {
+                let compressed = {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let zstd_level = match level {
+                            1..=9 => level as i32,
+                            _ => 3,
+                        };
+                        zstd::bulk::compress(chunk, zstd_level).map_err(|e| MzcError::IoError(e.to_string()))?
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return Err(MzcError::IoError("Zstd is not supported on WASM target".to_string()));
+                    }
+                };
+                (chunk_orig_size, compressed)
+            } else {
+                // A. 전처리 필터 적용
+                let mut processed_chunk = chunk.to_vec();
+                if uses_extended_flags {
+                    // MZC7의 경우 미디어 전용 필터를 최우선 적용합니다.
+                    if png {
+                        filters::apply_png_filter(&mut processed_chunk);
+                    } else if lpc {
+                        filters::apply_lpc_filter(&mut processed_chunk);
+                    } else if bwt {
+                        filters::apply_bwt_filter(&mut processed_chunk);
+                    } else {
+                        // 미디어 필터가 없으면 기존 Delta/BCJ 필터 적용
+                        if bcj {
+                            rle::apply_bcj_filter(&mut processed_chunk);
+                        }
+                        if delta {
+                            rle::apply_delta_filter(&mut processed_chunk);
+                        }
+                    }
                 } else {
-                    // 미디어 필터가 없으면 기존 Delta/BCJ 필터 적용
+                    // 구버전 규격 필터 적용
                     if bcj {
                         rle::apply_bcj_filter(&mut processed_chunk);
                     }
@@ -430,77 +475,71 @@ where
                         rle::apply_delta_filter(&mut processed_chunk);
                     }
                 }
-            } else {
-                // 구버전 규격 필터 적용
-                if bcj {
-                    rle::apply_bcj_filter(&mut processed_chunk);
-                }
-                if delta {
-                    rle::apply_delta_filter(&mut processed_chunk);
-                }
-            }
 
-            // B. 사전 추출 및 매칭
-            let dict = if let Some(g_dict) = global_dict_ref {
-                g_dict.clone()
-            } else if alg_type != ALGORITHM_RLE {
-                build_dictionary(&processed_chunk)
-            } else {
-                Dictionary::new()
-            };
+                // B. 사전 추출 및 매칭
+                let dict = if let Some(g_dict) = global_dict_ref {
+                    g_dict.clone()
+                } else if alg_type != ALGORITHM_RLE {
+                    build_dictionary(&processed_chunk)
+                } else {
+                    Dictionary::new()
+                };
 
-            // C. RLE 하이브리드 압축 수행
-            let config = rle::CompressionConfig::from_level(level);
-            let blocks = rle::compress_to_blocks(&processed_chunk, &dict, alg_type, &config);
-            let rle_payload = rle::serialize_blocks_v5(&blocks);
+                // C. RLE 하이브리드 압축 수행
+                let config = rle::CompressionConfig::from_level(level);
+                let blocks = rle::compress_to_blocks(&processed_chunk, &dict, alg_type, &config);
+                let rle_payload = rle::serialize_blocks_v5(&blocks);
 
-            // D. 사전과 RLE 페이로드 결합
-            let combined = if global_dict_ref.is_some() {
-                rle_payload
-            } else {
-                let mut combined = dict.to_bytes();
-                combined.extend_from_slice(&rle_payload);
-                combined
-            };
+                // D. 사전과 RLE 페이로드 결합
+                let combined = if global_dict_ref.is_some() {
+                    rle_payload
+                } else {
+                    let mut combined = dict.to_bytes();
+                    combined.extend_from_slice(&rle_payload);
+                    combined
+                };
 
-            let chunk_comb_size = combined.len() as u32;
+                let chunk_comb_size = combined.len() as u32;
 
-            if entropy == EntropyMode::Cm {
-                println!(
-                    "compress_bytes_v2_with_progress_dict: combined len = {}, first 15 = {:?}",
-                    combined.len(),
-                    &combined[..std::cmp::min(15, combined.len())]
-                );
-            }
-
-            // E. 엔트로피 코딩 추가 압축 적용
-            // - `?` 연산자: Result에서 에러가 발생하면 클로저 밖으로 즉시 에러를 반환시킵니다.
-            let final_payload = if entropy == EntropyMode::Huffman {
-                huffman_compress(&combined)
-            } else if entropy == EntropyMode::Dynamic {
-                huffman_compress_dynamic(&combined)
-            } else if entropy == EntropyMode::Ans {
-                ans::ans_compress(&combined)?
-            } else if entropy == EntropyMode::Cm {
-                let res = cm::cm_compress(&combined);
-                if let Ok(ref comp) = res {
+                if entropy == EntropyMode::Cm {
                     println!(
-                        "compress_bytes_v2_with_progress_dict: CM input len = {}, output len = {}",
+                        "compress_bytes_v2_with_progress_dict: combined len = {}, first 15 = {:?}",
                         combined.len(),
-                        comp.len()
-                    );
-                    println!(
-                        "compress_bytes_v2_with_progress_dict: CM input 15 = {:?}",
                         &combined[..std::cmp::min(15, combined.len())]
                     );
-                    println!(
-                        "compress_bytes_v2_with_progress_dict: CM output 15 = {:?}",
-                        &comp[..std::cmp::min(15, comp.len())]
-                    );
                 }
-                res?
-            } else {
-                combined
+
+                // E. 엔트로피 코딩 추가 압축 적용
+                // - `?` 연산자: Result에서 에러가 발생하면 클로저 밖으로 즉시 에러를 반환시킵니다.
+                let final_payload = if entropy == EntropyMode::Huffman {
+                    huffman_compress(&combined)
+                } else if entropy == EntropyMode::Dynamic {
+                    huffman_compress_dynamic(&combined)
+                } else if entropy == EntropyMode::Ans {
+                    ans::ans_compress(&combined)?
+                } else if entropy == EntropyMode::Cm {
+                    let res = cm::cm_compress(&combined);
+                    if let Ok(ref comp) = res {
+                        println!(
+                            "compress_bytes_v2_with_progress_dict: CM input len = {}, output len = {}",
+                            combined.len(),
+                            comp.len()
+                        );
+                        println!(
+                            "compress_bytes_v2_with_progress_dict: CM input 15 = {:?}",
+                            &combined[..std::cmp::min(15, combined.len())]
+                        );
+                        println!(
+                            "compress_bytes_v2_with_progress_dict: CM output 15 = {:?}",
+                            &comp[..std::cmp::min(15, comp.len())]
+                        );
+                    }
+                    res?
+                } else {
+                    combined
+                };
+
+                (chunk_comb_size, final_payload)
             };
 
             let chunk_comp_size = final_payload.len() as u32;
@@ -539,46 +578,55 @@ where
 
     // 3. 파일 헤더의 알고리즘 타입 플래그 비트 빌드 (비트 조작 마스크)
     let algorithm_type_flag = if uses_extended_flags {
-        // MZC7+ 비트 패킹 구조 매핑:
-        // - bits 0-1: 코어 알고리즘 (0 = Rle, 1 = Dict, 2 = Hybrid, 3 = Lz77)
-        let core_bits = match mode {
-            CompressionMode::Rle => 0,
-            CompressionMode::Dict => 1,
-            CompressionMode::Hybrid => 2,
-            CompressionMode::Lz77 => 3,
-        };
-        // - bits 2-4: 엔트로피 모드 (0 = None, 1 = Huffman, 2 = Dynamic, 3 = Ans, 4 = Cm)
-        let entropy_bits = match entropy {
-            EntropyMode::None => 0,
-            EntropyMode::Huffman => 1,
-            EntropyMode::Dynamic => 2,
-            EntropyMode::Ans => 3,
-            EntropyMode::Cm => 4,
-        };
-        // - bits 5-7: 필터 모드 (0 = None, 1 = Delta, 2 = BCJ, 3 = PNG, 4 = LPC, 5 = Delta + BCJ, 6 = BWT)
-        let filter_bits = if png {
-            3
-        } else if lpc {
-            4
-        } else if bwt {
-            6
-        } else if delta && bcj {
-            5
-        } else if delta {
-            1
-        } else if bcj {
-            2
-        } else {
-            0
-        };
+        match mode {
+            CompressionMode::Deflate => ALGORITHM_DEFLATE,
+            CompressionMode::Zstd => ALGORITHM_ZSTD,
+            _ => {
+                // MZC7+ 비트 패킹 구조 매핑:
+                // - bits 0-1: 코어 알고리즘 (0 = Rle, 1 = Dict, 2 = Hybrid, 3 = Lz77)
+                let core_bits = match mode {
+                    CompressionMode::Rle => 0,
+                    CompressionMode::Dict => 1,
+                    CompressionMode::Hybrid => 2,
+                    CompressionMode::Lz77 => 3,
+                    _ => unreachable!(),
+                };
+                // - bits 2-4: 엔트로피 모드 (0 = None, 1 = Huffman, 2 = Dynamic, 3 = Ans, 4 = Cm)
+                let entropy_bits = match entropy {
+                    EntropyMode::None => 0,
+                    EntropyMode::Huffman => 1,
+                    EntropyMode::Dynamic => 2,
+                    EntropyMode::Ans => 3,
+                    EntropyMode::Cm => 4,
+                };
+                // - bits 5-7: 필터 모드 (0 = None, 1 = Delta, 2 = BCJ, 3 = PNG, 4 = LPC, 5 = Delta + BCJ, 6 = BWT)
+                let filter_bits = if png {
+                    3
+                } else if lpc {
+                    4
+                } else if bwt {
+                    6
+                } else if delta && bcj {
+                    5
+                } else if delta {
+                    1
+                } else if bcj {
+                    2
+                } else {
+                    0
+                };
 
-        // 비트들을 쉬프트 시켜 1개의 바이트 플래그 정보로 패킹합니다.
-        core_bits | (entropy_bits << 2) | (filter_bits << 5)
+                // 비트들을 쉬프트 시켜 1개의 바이트 플래그 정보로 패킹합니다.
+                core_bits | (entropy_bits << 2) | (filter_bits << 5)
+            }
+        }
     } else {
         // 기존 버전들 알고리즘 플래그 빌드
         let core_alg = match (mode, entropy) {
             (CompressionMode::Rle, EntropyMode::None) => ALGORITHM_RLE,
             (CompressionMode::Lz77, _) => ALGORITHM_LZ77,
+            (CompressionMode::Deflate, _) => ALGORITHM_DEFLATE,
+            (CompressionMode::Zstd, _) => ALGORITHM_ZSTD,
             _ => ALGORITHM_HYBRID,
         };
         core_alg
@@ -729,9 +777,16 @@ where
 
     let header = MzcHeader::from_bytes(mzc_bytes)?;
 
-    if header.version == VERSION_MZC8 {
+    let is_mzc9_encrypted = header.version == VERSION_MZC9 && (header.checksum_type & 0x80) != 0;
+
+    if header.version == VERSION_MZC8 || is_mzc9_encrypted {
         let pwd = password.ok_or(MzcError::PasswordRequired)?;
-        let payload_area = &mzc_bytes[HEADER_SIZE_MZC8..];
+        let header_size = if is_mzc9_encrypted {
+            HEADER_SIZE_MZC9
+        } else {
+            HEADER_SIZE_MZC8
+        };
+        let payload_area = &mzc_bytes[header_size..];
         if payload_area.len() != header.payload_size as usize {
             return Err(MzcError::TruncatedBlock {
                 expected: header.payload_size as usize,
@@ -763,6 +818,9 @@ where
         let mut temp_header = header.clone();
         temp_header.magic = original_magic;
         temp_header.version = original_version;
+        if is_mzc9_encrypted {
+            temp_header.checksum_type &= !0x80;
+        }
         temp_header.payload_size = original_payload.len() as u64;
 
         let mut temp_mzc_bytes = temp_header.to_bytes();
@@ -938,9 +996,72 @@ where
         .par_iter()
         .zip(chunk_offsets.par_iter())
         .try_for_each(|(&(chunk_data, chunk_orig_size, chunk_comb_size), &offset)| {
-            // 엔트로피 타입 복원 감지 분기
+            if offset + chunk_orig_size > header.original_size as usize {
+                return Err(MzcError::OriginalSizeMismatch {
+                    expected: header.original_size,
+                    found: (offset + chunk_orig_size) as u64,
+                });
+            }
+
+            let dest_slice = unsafe {
+                std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size)
+            };
+
             let uses_extended_flags =
                 header.version == VERSION_MZC7 || header.version == VERSION_MZC9;
+
+            let is_deflate = uses_extended_flags && header.algorithm_type == ALGORITHM_DEFLATE;
+            let is_zstd = uses_extended_flags && header.algorithm_type == ALGORITHM_ZSTD;
+
+            if is_deflate {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use flate2::write::DeflateDecoder;
+                    use std::io::Write;
+                    let mut decoder = DeflateDecoder::new(Vec::new());
+                    decoder.write_all(chunk_data).map_err(|e| MzcError::IoError(e.to_string()))?;
+                    let decompressed = decoder.finish().map_err(|e| MzcError::IoError(e.to_string()))?;
+                    if decompressed.len() != chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: decompressed.len() as u64,
+                        });
+                    }
+                    dest_slice.copy_from_slice(&decompressed);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(MzcError::IoError("Deflate is not supported on WASM target".to_string()));
+                }
+
+                let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                on_chunk_progress_clone(current, chunk_count);
+                return Ok(());
+            }
+
+            if is_zstd {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let decompressed = zstd::bulk::decompress(chunk_data, chunk_orig_size).map_err(|e| MzcError::IoError(e.to_string()))?;
+                    if decompressed.len() != chunk_orig_size {
+                        return Err(MzcError::OriginalSizeMismatch {
+                            expected: chunk_orig_size as u64,
+                            found: decompressed.len() as u64,
+                        });
+                    }
+                    dest_slice.copy_from_slice(&decompressed);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(MzcError::IoError("Zstd is not supported on WASM target".to_string()));
+                }
+
+                let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                on_chunk_progress_clone(current, chunk_count);
+                return Ok(());
+            }
+
+            // 엔트로피 타입 복원 감지 분기
             let (is_huffman, is_dynamic, is_ans, is_cm) = if uses_extended_flags {
                 let entropy_bits = (header.algorithm_type >> 2) & 0x07;
                 (
@@ -980,10 +1101,7 @@ where
             };
 
             if unhuffman.len() < 2 && header.dictionary_size == 0 {
-                unsafe {
-                    let dest_slice = std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size);
-                    dest_slice.copy_from_slice(&unhuffman);
-                }
+                dest_slice[..unhuffman.len()].copy_from_slice(&unhuffman);
                 let current = progress_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
                 on_chunk_progress_clone(current, chunk_count);
                 return Ok(());
@@ -1005,13 +1123,19 @@ where
 
             // 디코딩용 코어 알고리즘 형태 추출
             let core_alg = if uses_extended_flags {
-                let core_bits = header.algorithm_type & 0x03;
-                match core_bits {
-                    0 => ALGORITHM_RLE,
-                    1 => ALGORITHM_DICT,
-                    2 => ALGORITHM_HYBRID,
-                    3 => ALGORITHM_LZ77,
-                    _ => unreachable!(),
+                if header.algorithm_type == ALGORITHM_DEFLATE {
+                    ALGORITHM_DEFLATE
+                } else if header.algorithm_type == ALGORITHM_ZSTD {
+                    ALGORITHM_ZSTD
+                } else {
+                    let core_bits = header.algorithm_type & 0x03;
+                    match core_bits {
+                        0 => ALGORITHM_RLE,
+                        1 => ALGORITHM_DICT,
+                        2 => ALGORITHM_HYBRID,
+                        3 => ALGORITHM_LZ77,
+                        _ => unreachable!(),
+                    }
                 }
             } else if header.version >= VERSION_MZC5 {
                 header.algorithm_type & 0x0F
@@ -1028,9 +1152,6 @@ where
             };
 
             // 안전한 DISJOINT 쓰기 복사 및 스트리밍 해제
-            let dest_slice = unsafe {
-                std::slice::from_raw_parts_mut((restored_ptr + offset) as *mut u8, chunk_orig_size)
-            };
 
             // RLE / LZ77 블록 압축 해제 복원
             let filter_bits = if uses_extended_flags {
@@ -1217,17 +1338,61 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
             CompressionMode::Dict => ALGORITHM_DICT,
             CompressionMode::Hybrid => ALGORITHM_HYBRID,
             CompressionMode::Lz77 => ALGORITHM_LZ77,
+            CompressionMode::Deflate => ALGORITHM_DEFLATE,
+            CompressionMode::Zstd => ALGORITHM_ZSTD,
         };
 
-        // A. 전처리 필터 적용
-        let mut processed_chunk = chunk.to_vec();
-        if is_v7 {
-            if png {
-                filters::apply_png_filter(&mut processed_chunk);
-            } else if lpc {
-                filters::apply_lpc_filter(&mut processed_chunk);
-            } else if bwt {
-                filters::apply_bwt_filter(&mut processed_chunk);
+        let (chunk_comb_size, final_payload) = if alg_type == ALGORITHM_DEFLATE {
+            let compressed = {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    use flate2::write::DeflateEncoder;
+                    use flate2::Compression;
+                    use std::io::Write;
+                    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::new(level as u32));
+                    encoder.write_all(chunk).map_err(|e| MzcError::IoError(e.to_string()))?;
+                    encoder.finish().map_err(|e| MzcError::IoError(e.to_string()))?
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(MzcError::IoError("Deflate is not supported on WASM target".to_string()));
+                }
+            };
+            (chunk_orig_size, compressed)
+        } else if alg_type == ALGORITHM_ZSTD {
+            let compressed = {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let zstd_level = match level {
+                        1..=9 => level as i32,
+                        _ => 3,
+                    };
+                    zstd::bulk::compress(chunk, zstd_level).map_err(|e| MzcError::IoError(e.to_string()))?
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(MzcError::IoError("Zstd is not supported on WASM target".to_string()));
+                }
+            };
+            (chunk_orig_size, compressed)
+        } else {
+            // A. 전처리 필터 적용
+            let mut processed_chunk = chunk.to_vec();
+            if is_v7 {
+                if png {
+                    filters::apply_png_filter(&mut processed_chunk);
+                } else if lpc {
+                    filters::apply_lpc_filter(&mut processed_chunk);
+                } else if bwt {
+                    filters::apply_bwt_filter(&mut processed_chunk);
+                } else {
+                    if bcj {
+                        rle::apply_bcj_filter(&mut processed_chunk);
+                    }
+                    if delta {
+                        rle::apply_delta_filter(&mut processed_chunk);
+                    }
+                }
             } else {
                 if bcj {
                     rle::apply_bcj_filter(&mut processed_chunk);
@@ -1236,51 +1401,46 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
                     rle::apply_delta_filter(&mut processed_chunk);
                 }
             }
-        } else {
-            if bcj {
-                rle::apply_bcj_filter(&mut processed_chunk);
-            }
-            if delta {
-                rle::apply_delta_filter(&mut processed_chunk);
-            }
-        }
 
-        // B. 사전 매칭
-        let dict = if let Some(ref g_dict) = global_dict {
-            g_dict.clone()
-        } else if alg_type != ALGORITHM_RLE {
-            build_dictionary(&processed_chunk)
-        } else {
-            Dictionary::new()
-        };
+            // B. 사전 매칭
+            let dict = if let Some(ref g_dict) = global_dict {
+                g_dict.clone()
+            } else if alg_type != ALGORITHM_RLE {
+                build_dictionary(&processed_chunk)
+            } else {
+                Dictionary::new()
+            };
 
-        // C. RLE 하이브리드 압축
-        let config = rle::CompressionConfig::from_level(level);
-        let blocks = rle::compress_to_blocks(&processed_chunk, &dict, alg_type, &config);
-        let rle_payload = rle::serialize_blocks_v5(&blocks);
+            // C. RLE 하이브리드 압축
+            let config = rle::CompressionConfig::from_level(level);
+            let blocks = rle::compress_to_blocks(&processed_chunk, &dict, alg_type, &config);
+            let rle_payload = rle::serialize_blocks_v5(&blocks);
 
-        // D. 사전과 페이로드 결합
-        let combined = if global_dict.is_some() {
-            rle_payload
-        } else {
-            let mut combined = dict.to_bytes();
-            combined.extend_from_slice(&rle_payload);
-            combined
-        };
+            // D. 사전과 페이로드 결합
+            let combined = if global_dict.is_some() {
+                rle_payload
+            } else {
+                let mut combined = dict.to_bytes();
+                combined.extend_from_slice(&rle_payload);
+                combined
+            };
 
-        let chunk_comb_size = combined.len() as u32;
+            let chunk_comb_size = combined.len() as u32;
 
-        // E. 엔트로피 코딩 압축
-        let final_payload = if entropy == EntropyMode::Huffman {
-            huffman_compress(&combined)
-        } else if entropy == EntropyMode::Dynamic {
-            huffman_compress_dynamic(&combined)
-        } else if entropy == EntropyMode::Ans {
-            ans::ans_compress(&combined)?
-        } else if entropy == EntropyMode::Cm {
-            cm::cm_compress(&combined)?
-        } else {
-            combined
+            // E. 엔트로피 코딩 압축
+            let final_payload = if entropy == EntropyMode::Huffman {
+                huffman_compress(&combined)
+            } else if entropy == EntropyMode::Dynamic {
+                huffman_compress_dynamic(&combined)
+            } else if entropy == EntropyMode::Ans {
+                ans::ans_compress(&combined)?
+            } else if entropy == EntropyMode::Cm {
+                cm::cm_compress(&combined)?
+            } else {
+                combined
+            };
+
+            (chunk_comb_size, final_payload)
         };
 
         let chunk_comp_size = final_payload.len() as u32;
@@ -1308,41 +1468,50 @@ pub fn compress_stream<R: std::io::Read, W: std::io::Write + std::io::Seek>(
     sha256_array.copy_from_slice(&final_sha256);
 
     let algorithm_type_flag = if is_v7 {
-        let core_bits = match mode {
-            CompressionMode::Rle => 0,
-            CompressionMode::Dict => 1,
-            CompressionMode::Hybrid => 2,
-            CompressionMode::Lz77 => 3,
-        };
-        let entropy_bits = match entropy {
-            EntropyMode::None => 0,
-            EntropyMode::Huffman => 1,
-            EntropyMode::Dynamic => 2,
-            EntropyMode::Ans => 3,
-            EntropyMode::Cm => 4,
-        };
-        let filter_bits = if png {
-            3
-        } else if lpc {
-            4
-        } else if bwt {
-            6
-        } else if delta && bcj {
-            5
-        } else if delta {
-            1
-        } else if bcj {
-            2
-        } else {
-            0
-        };
-        core_bits | (entropy_bits << 2) | (filter_bits << 5)
+        match mode {
+            CompressionMode::Deflate => ALGORITHM_DEFLATE,
+            CompressionMode::Zstd => ALGORITHM_ZSTD,
+            _ => {
+                let core_bits = match mode {
+                    CompressionMode::Rle => 0,
+                    CompressionMode::Dict => 1,
+                    CompressionMode::Hybrid => 2,
+                    CompressionMode::Lz77 => 3,
+                    _ => unreachable!(),
+                };
+                let entropy_bits = match entropy {
+                    EntropyMode::None => 0,
+                    EntropyMode::Huffman => 1,
+                    EntropyMode::Dynamic => 2,
+                    EntropyMode::Ans => 3,
+                    EntropyMode::Cm => 4,
+                };
+                let filter_bits = if png {
+                    3
+                } else if lpc {
+                    4
+                } else if bwt {
+                    6
+                } else if delta && bcj {
+                    5
+                } else if delta {
+                    1
+                } else if bcj {
+                    2
+                } else {
+                    0
+                };
+                core_bits | (entropy_bits << 2) | (filter_bits << 5)
+            }
+        }
     } else {
         let mut flag = match mode {
             CompressionMode::Rle => ALGORITHM_RLE,
             CompressionMode::Dict => ALGORITHM_DICT,
             CompressionMode::Hybrid => ALGORITHM_HYBRID,
             CompressionMode::Lz77 => ALGORITHM_LZ77,
+            CompressionMode::Deflate => ALGORITHM_DEFLATE,
+            CompressionMode::Zstd => ALGORITHM_ZSTD,
         };
         if delta {
             flag |= FILTER_DELTA;

@@ -38,6 +38,10 @@ pub enum CompressionMode {
     Hybrid,
     /// LZ77 슬라이딩 윈도우 기반 하이브리드 압축 모드 (MZC3 스펙)
     Lz77,
+    /// Deflate (Gzip/Zip 호환) 압축 모드
+    Deflate,
+    /// Zstandard (zstd) 압축 모드
+    Zstd,
 }
 
 /// **엔트로피 코딩(Entropy Coding) 2차 비트 압축 방식을 정의하는 열거형입니다.**

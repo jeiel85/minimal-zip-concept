@@ -111,18 +111,43 @@ try {
 
     if (-not $SkipSmoke) {
         Invoke-Step "file compress/inspect/decompress smoke" {
+            $sourceHash = (Get-FileHash -LiteralPath "samples/repeated.txt").Hash
+
+            # 1. Default Mode Smoke Test
             Invoke-Cargo run --quiet -- compress samples/repeated.txt samples/repeated.release-test.mzc
             Invoke-Cargo run --quiet -- inspect samples/repeated.release-test.mzc
             Invoke-Cargo run --quiet -- decompress samples/repeated.release-test.mzc samples/repeated.release-test.restored.txt
 
-            $sourceHash = (Get-FileHash -LiteralPath "samples/repeated.txt").Hash
             $restoredHash = (Get-FileHash -LiteralPath "samples/repeated.release-test.restored.txt").Hash
             if ($sourceHash -ne $restoredHash) {
                 throw "File smoke roundtrip hash mismatch"
             }
-
             Remove-Item -LiteralPath "samples/repeated.release-test.mzc" -Force
             Remove-Item -LiteralPath "samples/repeated.release-test.restored.txt" -Force
+
+            # 2. Deflate Mode Smoke Test
+            Invoke-Cargo run --quiet -- compress samples/repeated.txt samples/repeated.deflate.mzc --mode deflate
+            Invoke-Cargo run --quiet -- inspect samples/repeated.deflate.mzc
+            Invoke-Cargo run --quiet -- decompress samples/repeated.deflate.mzc samples/repeated.deflate.restored.txt
+
+            $deflateHash = (Get-FileHash -LiteralPath "samples/repeated.deflate.restored.txt").Hash
+            if ($sourceHash -ne $deflateHash) {
+                throw "Deflate CLI smoke roundtrip hash mismatch"
+            }
+            Remove-Item -LiteralPath "samples/repeated.deflate.mzc" -Force
+            Remove-Item -LiteralPath "samples/repeated.deflate.restored.txt" -Force
+
+            # 3. Zstd Mode Smoke Test
+            Invoke-Cargo run --quiet -- compress samples/repeated.txt samples/repeated.zstd.mzc --mode zstd
+            Invoke-Cargo run --quiet -- inspect samples/repeated.zstd.mzc
+            Invoke-Cargo run --quiet -- decompress samples/repeated.zstd.mzc samples/repeated.zstd.restored.txt
+
+            $zstdHash = (Get-FileHash -LiteralPath "samples/repeated.zstd.restored.txt").Hash
+            if ($sourceHash -ne $zstdHash) {
+                throw "Zstd CLI smoke roundtrip hash mismatch"
+            }
+            Remove-Item -LiteralPath "samples/repeated.zstd.mzc" -Force
+            Remove-Item -LiteralPath "samples/repeated.zstd.restored.txt" -Force
         }
 
         Invoke-Step "archive compress/inspect/decompress smoke" {

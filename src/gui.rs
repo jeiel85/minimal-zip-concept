@@ -263,10 +263,15 @@ impl MzcGuiApp {
         // 프리미엄 다크 슬레이트 테마 비주얼(Visuals) 설정
         let mut visuals = egui::Visuals::dark();
         visuals.window_rounding = 12.0.into();
-        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(18, 18, 20); // 딥 다크 블랙
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(30, 30, 35); // 다크 그레이
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(45, 45, 52);
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(45, 206, 137); // HSL 포인트 민트그린
+        visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(20, 20, 26); // 슬레이트 다크 블랙
+        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(32, 32, 42); // 딥 슬레이트
+        visuals.widgets.inactive.rounding = 8.0.into();
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(46, 46, 62);
+        visuals.widgets.hovered.rounding = 8.0.into();
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(52, 152, 219); // 스카이블루 활성 포인트
+        visuals.widgets.active.rounding = 8.0.into();
+        visuals.widgets.open.rounding = 8.0.into();
+        visuals.selection.bg_fill = egui::Color32::from_rgb(52, 152, 219).linear_multiply(0.4);
         cc.egui_ctx.set_visuals(visuals);
 
         // 스레드 통신용 채널쌍 생성
@@ -928,6 +933,8 @@ impl MzcGuiApp {
                         CompressionMode::Dict => "Dictionary Only Mode",
                         CompressionMode::Hybrid => "Hybrid Mode",
                         CompressionMode::Lz77 => "LZ77 Hybrid Mode",
+                        CompressionMode::Deflate => "Deflate Mode",
+                        CompressionMode::Zstd => "Zstd Mode",
                     }
                     .to_string();
 
@@ -2050,6 +2057,7 @@ impl eframe::App for MzcGuiApp {
         egui::SidePanel::left("sidebar_panel")
             .width_range(260.0..=285.0)
             .show(ctx, |ui| {
+                let is_standard_mzc9 = self.compression_mode == CompressionMode::Deflate || self.compression_mode == CompressionMode::Zstd;
                 ui.add_space(20.0);
                 ui.heading("⚙ MZC Engine Control");
                 ui.add_space(15.0);
@@ -2074,34 +2082,55 @@ impl eframe::App for MzcGuiApp {
                         CompressionMode::Rle,
                         "Retro RLE 단독 (MZC1)",
                     );
+                    ui.selectable_value(
+                        &mut self.compression_mode,
+                        CompressionMode::Deflate,
+                        "Deflate (Gzip 호환, MZC9)",
+                    );
+                    ui.selectable_value(
+                        &mut self.compression_mode,
+                        CompressionMode::Zstd,
+                        "Zstandard (zstd, MZC9)",
+                    );
+
+                    if is_standard_mzc9 {
+                        self.entropy_mode = EntropyMode::None;
+                        self.png_enabled = false;
+                        self.lpc_enabled = false;
+                        self.delta_enabled = false;
+                        self.bcj_enabled = false;
+                        self.dict_path = None;
+                    }
 
                     ui.add_space(10.0);
                     ui.label("엔트로피 코더 (2차 비트 압축):");
-                    ui.selectable_value(
-                        &mut self.entropy_mode,
-                        EntropyMode::Cm,
-                        "Context Mixing (MZC7)",
-                    );
-                    ui.selectable_value(
-                        &mut self.entropy_mode,
-                        EntropyMode::Ans,
-                        "tANS 테이블 압축 (MZC6)",
-                    );
-                    ui.selectable_value(
-                        &mut self.entropy_mode,
-                        EntropyMode::Dynamic,
-                        "동적 허프만 (MZC4)",
-                    );
-                    ui.selectable_value(
-                        &mut self.entropy_mode,
-                        EntropyMode::Huffman,
-                        "정적 허프만 코딩",
-                    );
-                    ui.selectable_value(
-                        &mut self.entropy_mode,
-                        EntropyMode::None,
-                        "2차 압축 안함 (None)",
-                    );
+                    ui.add_enabled_ui(!is_standard_mzc9, |ui| {
+                        ui.selectable_value(
+                            &mut self.entropy_mode,
+                            EntropyMode::Cm,
+                            "Context Mixing (MZC7)",
+                        );
+                        ui.selectable_value(
+                            &mut self.entropy_mode,
+                            EntropyMode::Ans,
+                            "tANS 테이블 압축 (MZC6)",
+                        );
+                        ui.selectable_value(
+                            &mut self.entropy_mode,
+                            EntropyMode::Dynamic,
+                            "동적 허프만 (MZC4)",
+                        );
+                        ui.selectable_value(
+                            &mut self.entropy_mode,
+                            EntropyMode::Huffman,
+                            "정적 허프만 코딩",
+                        );
+                        ui.selectable_value(
+                            &mut self.entropy_mode,
+                            EntropyMode::None,
+                            "2차 압축 안함 (None)",
+                        );
+                    });
 
                     ui.add_space(10.0);
                     ui.separator();
@@ -2112,10 +2141,12 @@ impl eframe::App for MzcGuiApp {
                             .text("압축 레벨 (1-9)"),
                     );
 
-                    ui.checkbox(&mut self.png_enabled, "PNG Paeth 필터 (MZC7)");
-                    ui.checkbox(&mut self.lpc_enabled, "LPC PCM 오디오 필터 (MZC7)");
-                    ui.checkbox(&mut self.delta_enabled, "Delta 차분 필터");
-                    ui.checkbox(&mut self.bcj_enabled, "BCJ 기계어 필터");
+                    ui.add_enabled_ui(!is_standard_mzc9, |ui| {
+                        ui.checkbox(&mut self.png_enabled, "PNG Paeth 필터 (MZC7)");
+                        ui.checkbox(&mut self.lpc_enabled, "LPC PCM 오디오 필터 (MZC7)");
+                        ui.checkbox(&mut self.delta_enabled, "Delta 차분 필터");
+                        ui.checkbox(&mut self.bcj_enabled, "BCJ 기계어 필터");
+                    });
 
                     let mut simd_val = self.simd_enabled;
                     if ui
@@ -2143,33 +2174,35 @@ impl eframe::App for MzcGuiApp {
 
                 ui.add_space(10.0);
 
-                ui.group(|ui| {
-                    ui.label("📁 전역 공유 사전 설정");
-                    ui.add_space(4.0);
+                ui.add_enabled_ui(!is_standard_mzc9, |ui| {
+                    ui.group(|ui| {
+                        ui.label("📁 전역 공유 사전 설정");
+                        ui.add_space(4.0);
 
-                    ui.horizontal(|ui| {
-                        if let Some(ref path) = self.dict_path {
-                            let name = path
-                                .file_name()
-                                .unwrap_or(path.as_os_str())
-                                .to_string_lossy();
-                            ui.label(format!("선택됨: {}", name));
-                        } else {
-                            ui.label("없음 (로컬 사전)");
-                        }
-                    });
+                        ui.horizontal(|ui| {
+                            if let Some(ref path) = self.dict_path {
+                                let name = path
+                                    .file_name()
+                                    .unwrap_or(path.as_os_str())
+                                    .to_string_lossy();
+                                ui.label(format!("선택됨: {}", name));
+                            } else {
+                                ui.label("없음 (로컬 사전)");
+                            }
+                        });
 
-                    ui.horizontal(|ui| {
-                        if ui.button("📁 선택...").clicked() {
-                            if let Some(path) = rfd::FileDialog::new().pick_file() {
-                                self.dict_path = Some(path);
+                        ui.horizontal(|ui| {
+                            if ui.button("📁 선택...").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                                    self.dict_path = Some(path);
+                                }
                             }
-                        }
-                        if self.dict_path.is_some() {
-                            if ui.button("❌ 제거").clicked() {
-                                self.dict_path = None;
+                            if self.dict_path.is_some() {
+                                if ui.button("❌ 제거").clicked() {
+                                    self.dict_path = None;
+                                }
                             }
-                        }
+                        });
                     });
                 });
 
@@ -2397,11 +2430,38 @@ impl eframe::App for MzcGuiApp {
         // ================== CENTRAL PANEL (중앙 결과 분석 및 멀티 탭 영역) ==================
         egui::CentralPanel::default().show(ctx, |ui| {
             if is_drag_hovered {
-                ui.group(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(ui.available_height() / 2.0 - 20.0);
-                        ui.colored_label(egui::Color32::from_rgb(45, 206, 137), " 여기에 파일을 드롭하세요 ");
-                    });
+                let rect = ui.available_rect_before_wrap();
+                let painter = ui.painter();
+                // 반투명 슬레이트 다크 배경 페이드
+                painter.rect_filled(
+                    rect,
+                    8.0,
+                    egui::Color32::from_black_alpha(200),
+                );
+                // 은은한 스카이블루 글로우/테두리
+                let stroke_color = egui::Color32::from_rgb(52, 152, 219);
+                painter.rect_stroke(
+                    rect.shrink(16.0),
+                    12.0,
+                    egui::Stroke::new(2.5, stroke_color),
+                );
+                
+                ui.vertical_centered(|ui| {
+                    ui.add_space(rect.height() / 2.0 - 60.0);
+                    ui.label(egui::RichText::new("📥").size(56.0));
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new("여기에 파일을 드롭하여 즉시 준비")
+                            .size(22.0)
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("MZC 고도화 압축 파이프라인이 즉시 로딩합니다.")
+                            .size(13.0)
+                            .color(egui::Color32::from_rgb(180, 180, 200)),
+                    );
                 });
                 return;
             }

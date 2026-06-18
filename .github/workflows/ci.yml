@@ -22,6 +22,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
+        targets: wasm32-unknown-unknown
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -40,9 +41,9 @@ jobs:
     - name: Run cargo clippy
       run: cargo clippy --all-targets
 
-    - name: Run cargo test
+    - name: Run cargo test & verify
       shell: pwsh
-      run: ./scripts/verify-release.ps1 -Mode Fast -SkipReleaseBuild -SkipWasm -SkipSmoke
+      run: ./scripts/verify-release.ps1 -Mode Fast -SkipReleaseBuild
 
   coverage:
     name: Code Coverage

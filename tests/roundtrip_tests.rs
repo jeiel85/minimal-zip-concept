@@ -244,6 +244,66 @@ fn assert_roundtrip(original: &[u8]) {
         calculate_sha256(&restored_cm),
         "MZC7 CM: 체크섬 불일치."
     );
+
+    // ================== 12. MZC9 Deflate (Gzip 호환) 검증 ==================
+    let compressed_deflate = mzc::compress_bytes_v2(
+        original,
+        CompressionMode::Deflate,
+        EntropyMode::None,
+        6,
+        false,
+        false,
+        false,
+        false,
+    );
+    let restored_deflate = mzc::decompress_bytes_v2(&compressed_deflate)
+        .expect("MZC9 Deflate 압축 해제 실패");
+
+    assert_eq!(
+        original.len(),
+        restored_deflate.len(),
+        "Deflate: 원본 크기와 복원 크기가 다릅니다."
+    );
+    assert_eq!(
+        original,
+        restored_deflate.as_slice(),
+        "Deflate: 원본 바이트와 복원 바이트가 불일치합니다."
+    );
+    assert_eq!(
+        original_hash,
+        calculate_sha256(&restored_deflate),
+        "Deflate: 체크섬 불일치."
+    );
+
+    // ================== 13. MZC9 Zstandard (zstd) 검증 ==================
+    let compressed_zstd = mzc::compress_bytes_v2(
+        original,
+        CompressionMode::Zstd,
+        EntropyMode::None,
+        3,
+        false,
+        false,
+        false,
+        false,
+    );
+    let restored_zstd = mzc::decompress_bytes_v2(&compressed_zstd)
+        .expect("MZC9 Zstd 압축 해제 실패");
+
+    assert_eq!(
+        original.len(),
+        restored_zstd.len(),
+        "Zstd: 원본 크기와 복원 크기가 다릅니다."
+    );
+    assert_eq!(
+        original,
+        restored_zstd.as_slice(),
+        "Zstd: 원본 바이트와 복원 바이트가 불일치합니다."
+    );
+    assert_eq!(
+        original_hash,
+        calculate_sha256(&restored_zstd),
+        "Zstd: 체크섬 불일치."
+    );
 }
 
 #[test]

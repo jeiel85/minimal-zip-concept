@@ -836,8 +836,8 @@ fn test_archive_recovery() {
 fn test_fuzz_mzar_overflow_regression() {
     let crash_input = [
         0x4d, 0x5a, 0x41, 0x52, 0xf6, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00,
-        0xa3, 0x00, 0x00, 0x00,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
+        0x00, 0xa3, 0x00, 0x00, 0x00,
     ];
 
     let result = std::panic::catch_unwind(|| mzc::decompress_bytes_v2(&crash_input));
@@ -846,4 +846,237 @@ fn test_fuzz_mzar_overflow_regression() {
         result.unwrap().is_err(),
         "malformed MZAR input should be rejected"
     );
+}
+
+#[test]
+fn test_mzar_corrupted_entry_count() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&1000u32.to_le_bytes()); // entry count = 1000 (but file ends immediately)
+    
+    let dest_dir = create_unique_temp_dir("corrupt_entry_count");
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
+    assert!(result.is_err(), "Expected error for truncated headers");
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_truncated_payload() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&1u32.to_le_bytes()); // entry count = 1
+    
+    let path = b"test.txt";
+    malicious_mzar.extend_from_slice(&(path.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(path);
+    malicious_mzar.push(0); // entry_type = File
+    malicious_mzar.extend_from_slice(&100u64.to_le_bytes()); // file size = 100
+    malicious_mzar.extend_from_slice(b"too short data"); // only 14 bytes instead of 100
+    
+    let dest_dir = create_unique_temp_dir("truncated_payload");
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
+    assert!(result.is_err());
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_invalid_entry_type() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&1u32.to_le_bytes()); // entry count = 1
+    
+    let path = b"test.txt";
+    malicious_mzar.extend_from_slice(&(path.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(path);
+    malicious_mzar.push(99); // invalid entry_type (only 0, 1, 2 are valid)
+    malicious_mzar.extend_from_slice(&10u64.to_le_bytes());
+    malicious_mzar.extend_from_slice(b"1234567890");
+    
+    let dest_dir = create_unique_temp_dir("invalid_type");
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
+    assert!(result.is_err());
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_circular_duplicate_references() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&2u32.to_le_bytes()); // entry count = 2
+    
+    // Entry 1: file1.txt (Duplicate reference to file2.txt)
+    let path1 = b"file1.txt";
+    malicious_mzar.extend_from_slice(&(path1.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(path1);
+    malicious_mzar.push(2); // entry_type = Duplicate Reference
+    let ref1 = b"file2.txt";
+    malicious_mzar.extend_from_slice(&(ref1.len() as u64).to_le_bytes());
+    malicious_mzar.extend_from_slice(ref1);
+    
+    // Entry 2: file2.txt (Duplicate reference to file1.txt)
+    let path2 = b"file2.txt";
+    malicious_mzar.extend_from_slice(&(path2.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(path2);
+    malicious_mzar.push(2); // entry_type = Duplicate Reference
+    let ref2 = b"file1.txt";
+    malicious_mzar.extend_from_slice(&(ref2.len() as u64).to_le_bytes());
+    malicious_mzar.extend_from_slice(ref2);
+    
+    let result = mzc::archive::extract_single_file_from_mzar(&malicious_mzar, "file1.txt", None, None);
+    assert!(result.is_err(), "Expected circular reference error");
+    if let Err(e) = result {
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert!(e.to_string().contains("순환"));
+    }
+}
+
+#[test]
+fn test_mzar_corrupted_encrypted_metadata() {
+    use mzc::archive::{archive_directory_custom, CompressionParams};
+    use mzc::cli::{CompressionMode, EntropyMode};
+    
+    let src_dir = create_unique_temp_dir("encrypt_corr_src");
+    fs::write(src_dir.join("secret.txt"), b"top secret data").unwrap();
+    
+    let params = CompressionParams {
+        mode: CompressionMode::Hybrid,
+        entropy: EntropyMode::Huffman,
+        level: 1,
+        delta: false,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: Some("correct_password"),
+        chunk_size: None,
+        checksum_type: 0,
+    };
+    
+    let archive_bytes = archive_directory_custom(&src_dir, Some(&params)).unwrap();
+    cleanup_temp_dir(&src_dir);
+    
+    // Case 1: Decrypt with wrong password
+    let dest_dir = create_unique_temp_dir("encrypt_corr_dest1");
+    let result = extract_archive(&archive_bytes, &dest_dir, Some("wrong_password"), None);
+    assert!(result.is_err(), "Decryption with wrong password should fail");
+    cleanup_temp_dir(&dest_dir);
+    
+    // Case 2: Corrupted encrypted payload
+    let mut corrupted_bytes = archive_bytes.clone();
+    // Corrupt some bytes in the payload area
+    if corrupted_bytes.len() > 50 {
+        corrupted_bytes[45] ^= 0xFF;
+    }
+    let dest_dir2 = create_unique_temp_dir("encrypt_corr_dest2");
+    let result2 = extract_archive(&corrupted_bytes, &dest_dir2, Some("correct_password"), None);
+    assert!(result2.is_err(), "Decryption of corrupted payload should fail");
+    cleanup_temp_dir(&dest_dir2);
+}
+
+#[test]
+fn test_mzar_corrupted_path_non_utf8() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&1u32.to_le_bytes()); // entry count = 1
+
+    let bad_path = &[0xFF, 0xFE, 0xFD, 0xFC]; // Invalid UTF-8 sequence
+    malicious_mzar.extend_from_slice(&(bad_path.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(bad_path);
+    malicious_mzar.push(0); // File type
+    malicious_mzar.extend_from_slice(&5u64.to_le_bytes()); // size
+    malicious_mzar.extend_from_slice(b"hello");
+
+    let dest_dir = create_unique_temp_dir("bad_path_utf8");
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
+    assert!(result.is_err(), "Expected error for invalid UTF-8 path");
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_corrupted_mzc_payload() {
+    let mut malicious_mzar = Vec::new();
+    malicious_mzar.extend_from_slice(b"MZAR");
+    malicious_mzar.extend_from_slice(&1u32.to_le_bytes()); // entry count = 1
+
+    let path = b"corrupted.txt";
+    malicious_mzar.extend_from_slice(&(path.len() as u16).to_le_bytes());
+    malicious_mzar.extend_from_slice(path);
+    malicious_mzar.push(0); // File type
+
+    // MZC1 dummy corrupted header (magic: MZC1, original_size: 10, payload_size: 2)
+    // We intentionally make original_size 10 but payload data empty/corrupted
+    let mut mzc_data = Vec::new();
+    mzc_data.extend_from_slice(b"MZC1");
+    mzc_data.push(1); // version 1
+    mzc_data.push(1); // RLE algorithm
+    mzc_data.extend_from_slice(&10u64.to_le_bytes()); // original size
+    mzc_data.extend_from_slice(&2u64.to_le_bytes()); // payload size
+    mzc_data.extend_from_slice(&[0u8; 32]); // SHA256 dummy
+    mzc_data.extend_from_slice(b"xx"); // bad RLE payload
+
+    malicious_mzar.extend_from_slice(&(mzc_data.len() as u64).to_le_bytes());
+    malicious_mzar.extend_from_slice(&mzc_data);
+
+    let dest_dir = create_unique_temp_dir("corrupted_mzc");
+    let result = extract_archive(&malicious_mzar, &dest_dir, None, None);
+    assert!(result.is_err(), "Expected decompress failure due to corrupt MZC");
+    cleanup_temp_dir(&dest_dir);
+}
+
+#[test]
+fn test_mzar_metadata_out_of_bounds() {
+    // Truncated data right after magic
+    let bad_bytes1 = b"MZAR\x01\x00\x00\x00"; // entry count = 1, but no headers follow
+    let result1 = mzc::archive::parse_mzar_metadata(bad_bytes1);
+    assert!(result1.is_err());
+
+    // Too large path_len
+    let mut bad_bytes2 = Vec::new();
+    bad_bytes2.extend_from_slice(b"MZAR");
+    bad_bytes2.extend_from_slice(&1u32.to_le_bytes());
+    bad_bytes2.extend_from_slice(&1000u16.to_le_bytes()); // path_len = 1000, but file ends
+    let result2 = mzc::archive::parse_mzar_metadata(&bad_bytes2);
+    assert!(result2.is_err());
+}
+
+#[test]
+fn test_mzc9_encrypted_roundtrip() {
+    use mzc::archive::{archive_directory_custom, CompressionParams};
+    use mzc::cli::{CompressionMode, EntropyMode};
+
+    let src_dir = create_unique_temp_dir("mzc9_enc_src");
+    let dest_dir = create_unique_temp_dir("mzc9_enc_dest");
+
+    fs::write(src_dir.join("test_file.txt"), b"Confidential MZC9 encrypted data roundtrip test!").unwrap();
+
+    let params = CompressionParams {
+        mode: CompressionMode::Hybrid,
+        entropy: EntropyMode::Huffman,
+        level: 5,
+        delta: true,
+        bcj: false,
+        png: false,
+        lpc: false,
+        bwt: false,
+        dict_data: None,
+        password: Some("mzc9_secure_password"),
+        chunk_size: Some(8192), // MZC9 spec trigger
+        checksum_type: 1,      // CRC-32 (MZC9 spec trigger)
+    };
+
+    let archive_bytes = archive_directory_custom(&src_dir, Some(&params)).expect("MZC9 암호화 아카이브 생성 실패");
+    cleanup_temp_dir(&src_dir);
+
+    // 1. Decompress with wrong password should fail
+    let wrong_result = extract_archive(&archive_bytes, &dest_dir, Some("wrong_password"), None);
+    assert!(wrong_result.is_err(), "Wrong password must fail");
+
+    // 2. Decompress with correct password should succeed
+    extract_archive(&archive_bytes, &dest_dir, Some("mzc9_secure_password"), None).expect("MZC9 암호화 아카이브 추출 실패");
+
+    let ext_data = fs::read(dest_dir.join("test_file.txt")).unwrap();
+    assert_eq!(ext_data, b"Confidential MZC9 encrypted data roundtrip test!");
+
+    cleanup_temp_dir(&dest_dir);
 }

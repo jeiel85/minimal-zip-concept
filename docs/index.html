@@ -1110,6 +1110,8 @@
                                 <option value="3">LZ77 sliding window</option>
                                 <option value="0">RLE (Run-Length Encoding)</option>
                                 <option value="1">Dictionary substitution</option>
+                                <option value="4">Deflate (Zip/Gzip compatible)</option>
+                                <option value="5">Zstandard (zstd)</option>
                             </select>
                         </div>
 
@@ -2336,6 +2338,21 @@
             };
             reader.readAsArrayBuffer(file);
         }
+
+        document.getElementById("mode-select").addEventListener("change", (e) => {
+            const val = parseInt(e.target.value);
+            const isStandard = (val === 4 || val === 5);
+            
+            document.getElementById("entropy-select").disabled = isStandard;
+            document.getElementById("filter-delta").disabled = isStandard;
+            document.getElementById("filter-bcj").disabled = isStandard;
+            document.getElementById("filter-png").disabled = isStandard;
+            document.getElementById("filter-lpc").disabled = isStandard;
+            
+            if (isStandard) {
+                logToTerminal(`⚠️ [알림] 선택하신 알고리즘(${val === 4 ? 'Deflate' : 'Zstd'})은 브라우저(WASM) 환경에서는 지원되지 않습니다. CLI 또는 데스크탑 GUI(네이티브) 버전을 사용해 주세요.`, "warn");
+            }
+        });
 
         compressBtn.addEventListener("click", () => {
             if (!selectedFileData || !wasmInstance) return;
